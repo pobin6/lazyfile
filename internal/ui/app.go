@@ -380,15 +380,15 @@ func (a *App) draw() {
 func (a *App) drawPreview(layout Layout, height int) {
 	lines := a.previewLines()
 	offset := a.previewOffset
-	maxOffset := len(lines) - (height - 4)
+	maxOffset := len(lines) - (height - 5)
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
 	if offset > maxOffset {
 		offset = maxOffset
 	}
-	for index := offset; index < len(lines) && index-offset < height-4; index++ {
-		a.drawText(layout.LeftWidth+layout.MiddleWidth+1, index-offset+3,
+	for index := offset; index < len(lines) && index-offset < height-5; index++ {
+		a.drawText(layout.LeftWidth+layout.MiddleWidth+1, index-offset+4,
 			layout.RightWidth-2, lines[index])
 	}
 }
@@ -462,11 +462,11 @@ func (a *App) drawColumn(x, width, height int, title string) {
 	if width <= 0 {
 		return
 	}
-	a.drawText(x+1, 3, width-2, title)
+	a.drawText(x+1, 4, width-2, title)
 }
 
 func (a *App) drawColumnBorders(layout Layout, height int) {
-	if height <= 0 {
+	if height <= 3 {
 		return
 	}
 	borders := []struct {
@@ -483,42 +483,22 @@ func (a *App) drawColumnBorders(layout Layout, height int) {
 		if border.focused {
 			style = style.Foreground(tcell.ColorPurple)
 		}
-		for column := border.x; column < border.x+border.width; column++ {
+		right := border.x + border.width - 1
+		if border.width < 2 {
+			continue
+		}
+		for column := border.x; column <= right; column++ {
 			a.screen.SetContent(column, 3, '─', nil, style)
 			a.screen.SetContent(column, height-1, '─', nil, style)
 		}
-	}
-
-	verticalBorders := []struct {
-		x       int
-		focused bool
-	}{
-		{x: 0, focused: a.focusedCol == 0},
-		{x: layout.LeftWidth, focused: a.focusedCol == 0 || a.focusedCol == 1},
-		{x: layout.LeftWidth + layout.MiddleWidth, focused: a.focusedCol == 1 || a.focusedCol == 2},
-		{x: layout.LeftWidth + layout.MiddleWidth + layout.RightWidth - 1, focused: a.focusedCol == 2},
-	}
-	for _, border := range verticalBorders {
-		style := tcell.StyleDefault
-		if border.focused {
-			style = style.Foreground(tcell.ColorPurple)
+		for row := 4; row < height-1; row++ {
+			a.screen.SetContent(border.x, row, '│', nil, style)
+			a.screen.SetContent(right, row, '│', nil, style)
 		}
-		for row := 3; row < height; row++ {
-			if row == height-1 {
-				a.screen.SetContent(border.x, row, '└', nil, style)
-			} else {
-				a.screen.SetContent(border.x, row, '│', nil, style)
-			}
-		}
-		if border.x == 0 {
-			a.screen.SetContent(border.x, 3, '┌', nil, style)
-		} else if border.x == layout.LeftWidth+layout.MiddleWidth+layout.RightWidth-1 {
-			a.screen.SetContent(border.x, 3, '┐', nil, style)
-			a.screen.SetContent(border.x, height-1, '┘', nil, style)
-		} else {
-			a.screen.SetContent(border.x, 3, '┬', nil, style)
-			a.screen.SetContent(border.x, height-1, '┴', nil, style)
-		}
+		a.screen.SetContent(border.x, 3, '┌', nil, style)
+		a.screen.SetContent(right, 3, '┐', nil, style)
+		a.screen.SetContent(border.x, height-1, '└', nil, style)
+		a.screen.SetContent(right, height-1, '┘', nil, style)
 	}
 }
 
