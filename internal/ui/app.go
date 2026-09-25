@@ -332,6 +332,7 @@ func (a *App) draw() {
 	a.screen.Clear()
 	width, height := a.screen.Size()
 	layout := calculateLayout(width)
+	a.drawPathBar(width)
 
 	a.drawColumn(0, layout.LeftWidth, height, "Directories")
 	a.drawColumn(layout.LeftWidth, layout.MiddleWidth, height, "")
@@ -346,9 +347,9 @@ func (a *App) draw() {
 		if a.focusedCol == 0 && index == a.selected {
 			style = style.Reverse(true)
 		}
-		a.drawStyledText(1, index+2, layout.LeftWidth-2, entry.Name, style)
+		a.drawStyledText(1, index+4, layout.LeftWidth-2, entry.Name, style)
 	}
-	visibleItemRows := height - 3
+	visibleItemRows := height - 5
 	a.ensureItemVisible(visibleItemRows)
 	for index := a.itemScroll; index < len(a.current.Items); index++ {
 		if index-a.itemScroll >= visibleItemRows {
@@ -359,12 +360,12 @@ func (a *App) draw() {
 		if a.focusedCol == 1 && index == a.itemSelected {
 			style = style.Reverse(true)
 		}
-		a.drawStyledText(layout.LeftWidth+1, index-a.itemScroll+2, layout.MiddleWidth-2, item.Name(), style)
+		a.drawStyledText(layout.LeftWidth+1, index-a.itemScroll+4, layout.MiddleWidth-2, item.Name(), style)
 	}
 	a.drawPreview(layout, height)
 
 	if a.errorMessage != "" {
-		a.drawText(1, height-1, width-2, "Error: "+a.errorMessage)
+		a.drawText(1, height-2, width-2, "Error: "+a.errorMessage)
 	}
 
 	if a.inputOpen {
@@ -379,17 +380,43 @@ func (a *App) draw() {
 func (a *App) drawPreview(layout Layout, height int) {
 	lines := a.previewLines()
 	offset := a.previewOffset
-	maxOffset := len(lines) - (height - 2)
+	maxOffset := len(lines) - (height - 4)
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
 	if offset > maxOffset {
 		offset = maxOffset
 	}
-	for index := offset; index < len(lines) && index-offset < height-2; index++ {
-		a.drawText(layout.LeftWidth+layout.MiddleWidth+1, index-offset+1,
+	for index := offset; index < len(lines) && index-offset < height-4; index++ {
+		a.drawText(layout.LeftWidth+layout.MiddleWidth+1, index-offset+3,
 			layout.RightWidth-2, lines[index])
 	}
+}
+
+func (a *App) drawPathBar(width int) {
+	if width <= 0 {
+		return
+	}
+	style := tcell.StyleDefault
+	for column := 0; column < width; column++ {
+		a.screen.SetContent(column, 0, '─', nil, style)
+		a.screen.SetContent(column, 2, '─', nil, style)
+	}
+	a.screen.SetContent(0, 0, '┌', nil, style)
+	a.screen.SetContent(width-1, 0, '┐', nil, style)
+	a.screen.SetContent(0, 2, '└', nil, style)
+	a.screen.SetContent(width-1, 2, '┘', nil, style)
+	a.drawText(2, 1, width-4, a.selectedPath())
+}
+
+func (a *App) selectedPath() string {
+	if len(a.current.Items) > 0 && a.itemSelected < len(a.current.Items) {
+		return filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
+	}
+	if a.current.Path != "" {
+		return a.current.Path
+	}
+	return "No directory selected"
 }
 
 func (a *App) previewLines() []string {
@@ -435,13 +462,7 @@ func (a *App) drawColumn(x, width, height int, title string) {
 	if width <= 0 {
 		return
 	}
-	for row := 0; row < height; row++ {
-		a.screen.SetContent(x, row, '│', nil, tcell.StyleDefault)
-		if width > 1 {
-			a.screen.SetContent(x+width-1, row, '│', nil, tcell.StyleDefault)
-		}
-	}
-	a.drawText(x+1, 1, width-2, title)
+	a.drawText(x+1, 3, width-2, title)
 }
 
 func (a *App) drawColumnBorders(layout Layout, height int) {
@@ -463,7 +484,7 @@ func (a *App) drawColumnBorders(layout Layout, height int) {
 			style = style.Foreground(tcell.ColorPurple)
 		}
 		for column := border.x; column < border.x+border.width; column++ {
-			a.screen.SetContent(column, 0, '─', nil, style)
+			a.screen.SetContent(column, 3, '─', nil, style)
 			a.screen.SetContent(column, height-1, '─', nil, style)
 		}
 	}
@@ -482,8 +503,21 @@ func (a *App) drawColumnBorders(layout Layout, height int) {
 		if border.focused {
 			style = style.Foreground(tcell.ColorPurple)
 		}
-		for row := 0; row < height; row++ {
-			a.screen.SetContent(border.x, row, '│', nil, style)
+		for row := 3; row < height; row++ {
+			if row == height-1 {
+				a.screen.SetContent(border.x, row, '└', nil, style)
+			} else {
+				a.screen.SetContent(border.x, row, '│', nil, style)
+			}
+		}
+		if border.x == 0 {
+			a.screen.SetContent(border.x, 3, '┌', nil, style)
+		} else if border.x == layout.LeftWidth+layout.MiddleWidth+layout.RightWidth-1 {
+			a.screen.SetContent(border.x, 3, '┐', nil, style)
+			a.screen.SetContent(border.x, height-1, '┘', nil, style)
+		} else {
+			a.screen.SetContent(border.x, 3, '┬', nil, style)
+			a.screen.SetContent(border.x, height-1, '┴', nil, style)
 		}
 	}
 }

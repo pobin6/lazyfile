@@ -78,6 +78,14 @@ func TestCalculateLayout(t *testing.T) {
 	}
 }
 
+func TestSelectedPath(t *testing.T) {
+	directory := filesystem.Directory{Path: "/tmp/目录"}
+	app := App{current: directory}
+	if got := app.selectedPath(); got != "/tmp/目录" {
+		t.Fatalf("selected path = %q", got)
+	}
+}
+
 func TestEnsureItemVisibleKeepsSelectionAwayFromViewportEdges(t *testing.T) {
 	app := App{
 		current: filesystem.Directory{
