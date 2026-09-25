@@ -16,20 +16,23 @@ import (
 const maxPreviewBytes = 1024
 
 type App struct {
-	screen        tcell.Screen
-	current       filesystem.Directory
-	baseDir       string
-	input         []rune
-	inputOpen     bool
-	errorMessage  string
-	focusedCol    int
-	entries       []config.Entry
-	selected      int
-	inputMode     inputMode
-	confirmDelete bool
-	itemSelected  int
-	itemScroll    int
-	previewOffset int
+	screen             tcell.Screen
+	current            filesystem.Directory
+	baseDir            string
+	input              []rune
+	inputOpen          bool
+	errorMessage       string
+	focusedCol         int
+	collectionPage     bool
+	collections        []config.Collection
+	selectedCollection int
+	entries            []config.Entry
+	selected           int
+	inputMode          inputMode
+	confirmDelete      bool
+	itemSelected       int
+	itemScroll         int
+	previewOffset      int
 }
 
 type inputMode int
@@ -38,6 +41,7 @@ const (
 	inputPath inputMode = iota
 	inputAdd
 	inputEdit
+	inputAddCollection
 )
 
 func New(screen tcell.Screen, initialDir string) (*App, error) {
@@ -46,13 +50,21 @@ func New(screen tcell.Screen, initialDir string) (*App, error) {
 		return nil, err
 	}
 	app := &App{
-		screen:   screen,
-		baseDir:  initialDir,
-		entries:  state.Entries,
-		selected: state.SelectedIndex,
+		screen:             screen,
+		baseDir:            initialDir,
+		collections:        state.Collections,
+		selectedCollection: state.SelectedCollection,
+		collectionPage:     state.CollectionPage,
+		entries:            state.Entries,
+		selected:           state.SelectedIndex,
 	}
+	if len(app.collections) == 0 && len(app.entries) > 0 {
+		app.collections = []config.Collection{{Name: "Default", Entries: app.entries}}
+	}
+	app.normalizeCollections()
+	app.syncCollectionEntries()
 	app.normalizeSelection()
-	if len(app.entries) > 0 {
+	if !app.collectionPage && len(app.entries) > 0 {
 		if err := app.loadSelected(); err != nil {
 			app.errorMessage = err.Error()
 		}
@@ -92,21 +104,29 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			return true
 		case "a":
 			if a.focusedCol == 0 {
-				a.openInput(inputAdd)
+				if a.collectionPage {
+					a.openInput(inputAddCollection)
+				} else {
+					a.openInput(inputAdd)
+				}
 			} else {
 				a.openInput(inputPath)
 			}
 		case "e":
-			if a.focusedCol == 0 && len(a.entries) > 0 {
+			if a.focusedCol == 0 && !a.collectionPage && len(a.entries) > 0 {
 				a.openInput(inputEdit)
 			}
 		case "d":
-			if a.focusedCol == 0 && len(a.entries) > 0 {
+			if a.focusedCol == 0 && !a.collectionPage && len(a.entries) > 0 {
 				a.confirmDelete = true
 			}
 		case "j":
 			if a.focusedCol == 0 {
-				a.selectEntry(1)
+				if a.collectionPage {
+					a.selectCollection(1)
+				} else {
+					a.selectEntry(1)
+				}
 			} else if a.focusedCol == 1 {
 				a.selectItem(1)
 			} else {
@@ -114,7 +134,11 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			}
 		case "k":
 			if a.focusedCol == 0 {
-				a.selectEntry(-1)
+				if a.collectionPage {
+					a.selectCollection(-1)
+				} else {
+					a.selectEntry(-1)
+				}
 			} else if a.focusedCol == 1 {
 				a.selectItem(-1)
 			} else {
@@ -124,6 +148,19 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			a.moveFocus(-1)
 		case "l":
 			a.moveFocus(1)
+		case "[":
+			if a.focusedCol == 0 {
+				a.collectionPage = true
+				a.syncCollectionEntries()
+			}
+		case "]":
+			if a.focusedCol == 0 {
+				a.collectionPage = false
+				a.syncCollectionEntries()
+				if len(a.entries) > 0 {
+					_ = a.loadSelected()
+				}
+			}
 		}
 	case tcell.KeyLeft:
 		a.moveFocus(-1)
@@ -170,6 +207,51 @@ func (a *App) selectEntry(delta int) {
 	a.normalizeSelection()
 	if err := a.loadSelected(); err != nil {
 		a.errorMessage = err.Error()
+	}
+	if err := a.saveState(); err != nil {
+		a.errorMessage = err.Error()
+	}
+}
+
+func (a *App) normalizeCollections() {
+	if a.selectedCollection < 0 {
+		a.selectedCollection = 0
+	}
+	if len(a.collections) == 0 {
+		a.selectedCollection = 0
+		return
+	}
+	if a.selectedCollection >= len(a.collections) {
+		a.selectedCollection = len(a.collections) - 1
+	}
+}
+
+func (a *App) syncCollectionEntries() {
+	a.normalizeCollections()
+	if len(a.collections) == 0 {
+		a.entries = nil
+		a.selected = 0
+		a.current = filesystem.Directory{}
+		return
+	}
+	a.entries = a.collections[a.selectedCollection].Entries
+	a.normalizeSelection()
+	if a.collectionPage {
+		a.current = filesystem.Directory{}
+	}
+}
+
+func (a *App) selectCollection(delta int) {
+	if len(a.collections) == 0 {
+		return
+	}
+	a.selectedCollection += delta
+	a.normalizeCollections()
+	a.syncCollectionEntries()
+	if !a.collectionPage && len(a.entries) > 0 {
+		if err := a.loadSelected(); err != nil {
+			a.errorMessage = err.Error()
+		}
 	}
 	if err := a.saveState(); err != nil {
 		a.errorMessage = err.Error()
@@ -257,6 +339,9 @@ func (a *App) deleteSelected() {
 		return
 	}
 	a.entries = append(a.entries[:a.selected], a.entries[a.selected+1:]...)
+	if len(a.collections) > 0 {
+		a.collections[a.selectedCollection].Entries = a.entries
+	}
 	a.normalizeSelection()
 	a.current = filesystem.Directory{}
 	a.errorMessage = ""
@@ -271,9 +356,15 @@ func (a *App) deleteSelected() {
 }
 
 func (a *App) saveState() error {
+	if len(a.collections) > 0 {
+		a.collections[a.selectedCollection].Entries = a.entries
+	}
 	return config.Save(config.State{
-		Entries:       a.entries,
-		SelectedIndex: a.selected,
+		Entries:            a.entries,
+		SelectedIndex:      a.selected,
+		Collections:        a.collections,
+		SelectedCollection: a.selectedCollection,
+		CollectionPage:     a.collectionPage,
 	})
 }
 
@@ -304,6 +395,26 @@ func (a *App) handleInputKey(event *tcell.EventKey) bool {
 }
 
 func (a *App) submitPath() {
+	if a.inputMode == inputAddCollection {
+		name := strings.TrimSpace(string(a.input))
+		if name == "" {
+			a.errorMessage = "collection name cannot be empty"
+			return
+		}
+		a.collections = append(a.collections, config.Collection{Name: name})
+		a.selectedCollection = len(a.collections) - 1
+		a.entries = nil
+		a.selected = 0
+		a.current = filesystem.Directory{}
+		a.collectionPage = true
+		a.inputOpen = false
+		a.input = nil
+		a.errorMessage = ""
+		if err := a.saveState(); err != nil {
+			a.errorMessage = err.Error()
+		}
+		return
+	}
 	directory, err := filesystem.Load(string(a.input), a.baseDir)
 	if err != nil {
 		a.errorMessage = err.Error()
@@ -315,6 +426,9 @@ func (a *App) submitPath() {
 		a.selected = len(a.entries) - 1
 	case inputEdit:
 		a.entries[a.selected] = config.Entry{Path: directory.Path, Name: directory.Name}
+	}
+	if len(a.collections) > 0 {
+		a.collections[a.selectedCollection].Entries = a.entries
 	}
 	a.current = directory
 	a.itemSelected = 0
@@ -339,7 +453,11 @@ func (a *App) draw() {
 	a.drawColumn(layout.LeftWidth+layout.MiddleWidth, layout.RightWidth, height, "")
 	a.drawColumnBorders(layout, height)
 
-	for index, entry := range a.entries {
+	firstColumnEntries := a.entries
+	if a.collectionPage {
+		firstColumnEntries = nil
+	}
+	for index, entry := range firstColumnEntries {
 		if index >= height-3 {
 			break
 		}
@@ -348,6 +466,18 @@ func (a *App) draw() {
 			style = style.Reverse(true)
 		}
 		a.drawStyledText(1, index+4, layout.LeftWidth-2, entry.Name, style)
+	}
+	if a.collectionPage {
+		for index, collection := range a.collections {
+			if index >= height-3 {
+				break
+			}
+			style := tcell.StyleDefault
+			if a.focusedCol == 0 && index == a.selectedCollection {
+				style = style.Reverse(true)
+			}
+			a.drawStyledText(1, index+4, layout.LeftWidth-2, collection.Name, style)
+		}
 	}
 	visibleItemRows := height - 5
 	a.ensureItemVisible(visibleItemRows)
@@ -527,6 +657,8 @@ func (a *App) drawInputDialog(width, height int) {
 		title = "Add directory (Enter submit, Esc cancel)"
 	} else if a.inputMode == inputEdit {
 		title = "Edit directory (Enter submit, Esc cancel)"
+	} else if a.inputMode == inputAddCollection {
+		title = "Add collection (Enter submit, Esc cancel)"
 	}
 	a.drawText(x+2, y+1, dialogWidth-4, title)
 	a.drawText(x+2, y+2, dialogWidth-4, string(a.input))

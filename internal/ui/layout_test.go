@@ -173,3 +173,29 @@ func TestEntryNavigationAndDeleteConfirmation(t *testing.T) {
 		t.Fatalf("confirmed delete state: confirm=%t entries=%+v", app.confirmDelete, app.entries)
 	}
 }
+
+func TestCollectionNavigationAndPageSwitching(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	app := App{
+		collections: []config.Collection{
+			{Name: "one"},
+			{Name: "two"},
+		},
+		collectionPage: true,
+		focusedCol:     0,
+	}
+	app.syncCollectionEntries()
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "j", tcell.ModNone))
+	if app.selectedCollection != 1 {
+		t.Fatalf("selected collection = %d, want 1", app.selectedCollection)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "]", tcell.ModNone))
+	if app.collectionPage {
+		t.Fatal("expected entry page after ]")
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "[", tcell.ModNone))
+	if !app.collectionPage {
+		t.Fatal("expected collection page after [")
+	}
+}

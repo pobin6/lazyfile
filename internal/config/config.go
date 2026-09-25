@@ -13,9 +13,17 @@ type Entry struct {
 	Name string `json:"name"`
 }
 
+type Collection struct {
+	Name    string  `json:"name"`
+	Entries []Entry `json:"entries"`
+}
+
 type State struct {
-	Entries       []Entry `json:"entries"`
-	SelectedIndex int     `json:"selected_index"`
+	Entries            []Entry      `json:"entries"`
+	SelectedIndex      int          `json:"selected_index"`
+	Collections        []Collection `json:"collections,omitempty"`
+	SelectedCollection int          `json:"selected_collection,omitempty"`
+	CollectionPage     bool         `json:"collection_page,omitempty"`
 }
 
 func Load() (State, error) {
