@@ -551,11 +551,21 @@ func (a *App) drawStyledText(x, y, width int, value string, style tcell.Style) {
 		return
 	}
 	value = strings.TrimSpace(value)
-	for index, character := range []rune(value) {
-		if index >= width {
+	cursor := x
+	end := x + width
+	for _, character := range []rune(value) {
+		if cursor >= end {
 			break
 		}
-		a.screen.SetContent(x+index, y, character, nil, style)
+		_, cellWidth := a.screen.Put(cursor, y, string(character), style)
+		if cellWidth <= 0 {
+			continue
+		}
+		if cursor+cellWidth > end {
+			a.screen.SetContent(cursor, y, ' ', nil, style)
+			break
+		}
+		cursor += cellWidth
 	}
 }
 
