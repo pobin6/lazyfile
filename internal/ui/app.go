@@ -448,9 +448,6 @@ func (a *App) draw() {
 	layout := calculateLayout(width)
 	a.drawPathBar(width)
 
-	a.drawColumn(0, layout.LeftWidth, height, "Directories")
-	a.drawColumn(layout.LeftWidth, layout.MiddleWidth, height, "")
-	a.drawColumn(layout.LeftWidth+layout.MiddleWidth, layout.RightWidth, height, "")
 	a.drawColumnBorders(layout, height)
 
 	firstColumnEntries := a.entries
@@ -588,13 +585,6 @@ func (a *App) previewLines() []string {
 	return lines
 }
 
-func (a *App) drawColumn(x, width, height int, title string) {
-	if width <= 0 {
-		return
-	}
-	a.drawText(x+1, 4, width-2, title)
-}
-
 func (a *App) drawColumnBorders(layout Layout, height int) {
 	if height <= 3 {
 		return
@@ -610,25 +600,49 @@ func (a *App) drawColumnBorders(layout Layout, height int) {
 	}
 	for _, border := range borders {
 		style := tcell.StyleDefault
+		horizontal := '─'
+		vertical := '│'
+		topLeft := '┌'
+		topRight := '┐'
+		bottomLeft := '└'
+		bottomRight := '┘'
 		if border.focused {
-			style = style.Foreground(tcell.ColorPurple)
+			style = style.Foreground(tcell.ColorPurple).Bold(true)
+			horizontal = '━'
+			vertical = '┃'
+			topLeft = '┏'
+			topRight = '┓'
+			bottomLeft = '┗'
+			bottomRight = '┛'
 		}
 		right := border.x + border.width - 1
 		if border.width < 2 {
 			continue
 		}
 		for column := border.x; column <= right; column++ {
-			a.screen.SetContent(column, 3, '─', nil, style)
-			a.screen.SetContent(column, height-1, '─', nil, style)
+			a.screen.SetContent(column, 3, horizontal, nil, style)
+			a.screen.SetContent(column, height-1, horizontal, nil, style)
 		}
 		for row := 4; row < height-1; row++ {
-			a.screen.SetContent(border.x, row, '│', nil, style)
-			a.screen.SetContent(right, row, '│', nil, style)
+			a.screen.SetContent(border.x, row, vertical, nil, style)
+			a.screen.SetContent(right, row, vertical, nil, style)
 		}
-		a.screen.SetContent(border.x, 3, '┌', nil, style)
-		a.screen.SetContent(right, 3, '┐', nil, style)
-		a.screen.SetContent(border.x, height-1, '└', nil, style)
-		a.screen.SetContent(right, height-1, '┘', nil, style)
+		a.screen.SetContent(border.x, 3, topLeft, nil, style)
+		a.screen.SetContent(right, 3, topRight, nil, style)
+		a.screen.SetContent(border.x, height-1, bottomLeft, nil, style)
+		a.screen.SetContent(right, height-1, bottomRight, nil, style)
+	}
+
+	titles := []string{"Directories", "Files", "Preview"}
+	for index, border := range borders {
+		if border.width < 4 {
+			continue
+		}
+		style := tcell.StyleDefault
+		if border.focused {
+			style = style.Foreground(tcell.ColorPurple).Bold(true)
+		}
+		a.drawStyledText(border.x+2, 3, border.width-4, titles[index], style)
 	}
 }
 
