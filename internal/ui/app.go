@@ -30,9 +30,12 @@ type App struct {
 	selected           int
 	inputMode          inputMode
 	confirmDelete      bool
+	confirmItemDelete  bool
 	itemSelected       int
 	itemScroll         int
 	previewOffset      int
+	clipboardPath      string
+	clipboardCut       bool
 }
 
 type inputMode int
@@ -42,6 +45,7 @@ const (
 	inputAdd
 	inputEdit
 	inputAddCollection
+	inputAddItem
 )
 
 func New(screen tcell.Screen, initialDir string) (*App, error) {
@@ -91,6 +95,9 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 	if a.confirmDelete {
 		return a.handleDeleteConfirmation(event)
 	}
+	if a.confirmItemDelete {
+		return a.handleItemDeleteConfirmation(event)
+	}
 	if a.inputOpen {
 		return a.handleInputKey(event)
 	}
@@ -117,7 +124,9 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 				} else {
 					a.openInput(inputAdd)
 				}
-			} else if a.focusedCol == 1 || a.focusedCol == 2 {
+			} else if a.focusedCol == 1 {
+				a.openInput(inputAddItem)
+			} else if a.focusedCol == 2 {
 				a.openInput(inputPath)
 			}
 		case "e":
@@ -127,6 +136,8 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 		case "d":
 			if a.focusedCol == 0 && !a.collectionPage && len(a.entries) > 0 {
 				a.confirmDelete = true
+			} else if a.focusedCol == 1 && len(a.current.Items) > 0 && a.itemSelected < len(a.current.Items) {
+				a.confirmItemDelete = true
 			}
 		case "j":
 			if a.focusedCol == 0 {
@@ -160,6 +171,18 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			if a.focusedCol == 1 {
 				a.navigateChild()
 			}
+		case "y":
+			if a.focusedCol == 1 {
+				a.yankItem()
+			}
+		case "x":
+			if a.focusedCol == 1 {
+				a.cutItem()
+			}
+		case "p":
+			if a.focusedCol == 1 {
+				a.pasteItem()
+			}
 		case "[":
 			if a.focusedCol == 0 {
 				a.collectionPage = true
@@ -192,6 +215,25 @@ func (a *App) handleDeleteConfirmation(event *tcell.EventKey) bool {
 			a.deleteSelected()
 		case "n":
 			a.confirmDelete = false
+		}
+	}
+	return false
+}
+
+func (a *App) handleItemDeleteConfirmation(event *tcell.EventKey) bool {
+	switch event.Key() {
+	case tcell.KeyEscape:
+		a.confirmItemDelete = false
+	case tcell.KeyEnter:
+		a.confirmItemDelete = false
+		a.deleteCurrentItem()
+	case tcell.KeyRune:
+		switch event.Str() {
+		case "y":
+			a.confirmItemDelete = false
+			a.deleteCurrentItem()
+		case "n":
+			a.confirmItemDelete = false
 		}
 	}
 	return false
@@ -358,6 +400,118 @@ func (a *App) navigateTo(path string) {
 	}
 }
 
+func (a *App) yankItem() {
+	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
+		return
+	}
+	a.clipboardPath = filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
+	a.clipboardCut = false
+	a.errorMessage = "Selected: " + filepath.Base(a.clipboardPath)
+}
+
+func (a *App) cutItem() {
+	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
+		return
+	}
+	a.clipboardPath = filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
+	a.clipboardCut = true
+	a.errorMessage = "Cut: " + filepath.Base(a.clipboardPath)
+}
+
+func (a *App) pasteItem() {
+	if a.clipboardPath == "" {
+		a.errorMessage = "No item selected"
+		return
+	}
+	source := filepath.Clean(a.clipboardPath)
+	destination := filepath.Join(a.current.Path, filepath.Base(source))
+	if source == destination {
+		a.errorMessage = "Cannot paste an item onto itself"
+		return
+	}
+	if _, err := os.Stat(destination); err == nil {
+		a.errorMessage = "Destination already exists: " + filepath.Base(destination)
+		return
+	} else if !os.IsNotExist(err) {
+		a.errorMessage = fmt.Errorf("check destination: %w", err).Error()
+		return
+	}
+	if info, err := os.Stat(source); err != nil {
+		a.errorMessage = fmt.Errorf("stat selected item: %w", err).Error()
+		return
+	} else if info.IsDir() {
+		if isWithinRoot(source, destination) {
+			a.errorMessage = "Cannot paste a directory into itself"
+			return
+		}
+	}
+	var err error
+	if a.clipboardCut {
+		err = os.Rename(source, destination)
+	} else {
+		err = copyItem(source, destination)
+	}
+	if err != nil {
+		a.errorMessage = fmt.Errorf("paste item: %w", err).Error()
+		return
+	}
+	if a.clipboardCut {
+		a.clipboardPath = ""
+		a.clipboardCut = false
+	}
+	selectedName := filepath.Base(destination)
+	if err := a.refreshCurrent(selectedName); err != nil {
+		a.errorMessage = err.Error()
+		return
+	}
+	a.errorMessage = ""
+}
+
+func copyItem(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		if err := os.Mkdir(destination, info.Mode().Perm()); err != nil {
+			return err
+		}
+		children, err := os.ReadDir(source)
+		if err != nil {
+			return err
+		}
+		for _, child := range children {
+			if err := copyItem(filepath.Join(source, child.Name()), filepath.Join(destination, child.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(destination, data, info.Mode().Perm())
+}
+
+func (a *App) refreshCurrent(selectedName string) error {
+	directory, err := filesystem.Load(a.current.Path, a.baseDir)
+	if err != nil {
+		return err
+	}
+	a.current = directory
+	a.itemSelected = 0
+	for index, item := range directory.Items {
+		if item.Name() == selectedName {
+			a.itemSelected = index
+			break
+		}
+	}
+	a.itemScroll = 0
+	a.previewOffset = 0
+	return a.saveState()
+}
+
 func (a *App) selectItem(delta int) {
 	if len(a.current.Items) == 0 {
 		return
@@ -425,6 +579,7 @@ func (a *App) deleteSelected() {
 			a.errorMessage = err.Error()
 		}
 	}
+
 	if err := a.saveState(); err != nil {
 		a.errorMessage = err.Error()
 	}
@@ -434,6 +589,7 @@ func (a *App) saveState() error {
 	if len(a.collections) > 0 {
 		a.collections[a.selectedCollection].Entries = a.entries
 	}
+
 	return config.Save(config.State{
 		Entries:            a.entries,
 		SelectedIndex:      a.selected,
@@ -441,6 +597,22 @@ func (a *App) saveState() error {
 		SelectedCollection: a.selectedCollection,
 		CollectionPage:     a.collectionPage,
 	})
+}
+
+func (a *App) deleteCurrentItem() {
+	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
+		return
+	}
+	name := a.current.Items[a.itemSelected].Name()
+	if err := os.RemoveAll(filepath.Join(a.current.Path, name)); err != nil {
+		a.errorMessage = fmt.Errorf("delete item: %w", err).Error()
+		return
+	}
+	if err := a.refreshCurrent(""); err != nil {
+		a.errorMessage = err.Error()
+		return
+	}
+	a.errorMessage = ""
 }
 
 func (a *App) handleInputKey(event *tcell.EventKey) bool {
@@ -480,6 +652,10 @@ func (a *App) submitPath() {
 		}
 		return
 	}
+	if a.inputMode == inputAddItem {
+		a.createItem(strings.TrimSpace(string(a.input)))
+		return
+	}
 	directory, err := filesystem.Load(string(a.input), a.baseDir)
 	if err != nil {
 		a.errorMessage = err.Error()
@@ -511,6 +687,44 @@ func (a *App) submitPath() {
 	if err := a.saveState(); err != nil {
 		a.errorMessage = err.Error()
 	}
+}
+
+func (a *App) createItem(name string) {
+	if name == "" {
+		a.errorMessage = "item name cannot be empty"
+		return
+	}
+	relative := filepath.FromSlash(name)
+	if filepath.IsAbs(relative) || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		a.errorMessage = "item name must stay inside the current directory"
+		return
+	}
+	destination := filepath.Join(a.current.Path, relative)
+	if _, err := os.Stat(destination); err == nil {
+		a.errorMessage = "item already exists: " + name
+		return
+	} else if !os.IsNotExist(err) {
+		a.errorMessage = fmt.Errorf("check item: %w", err).Error()
+		return
+	}
+	var err error
+	if strings.Contains(name, "/") {
+		err = os.MkdirAll(destination, 0o755)
+	} else {
+		err = os.WriteFile(destination, nil, 0o644)
+	}
+	if err != nil {
+		a.errorMessage = fmt.Errorf("create item: %w", err).Error()
+		return
+	}
+	if err := a.refreshCurrent(filepath.Base(destination)); err != nil {
+		a.errorMessage = err.Error()
+		return
+	}
+	a.inputOpen = false
+	a.input = nil
+	a.errorMessage = ""
 }
 
 func (a *App) draw() {
@@ -571,6 +785,9 @@ func (a *App) draw() {
 	}
 	if a.confirmDelete {
 		a.drawDeleteConfirmation(width, height)
+	}
+	if a.confirmItemDelete {
+		a.drawItemDeleteConfirmation(width, height)
 	}
 	a.screen.Show()
 }
@@ -747,6 +964,8 @@ func (a *App) drawInputDialog(width, height int) {
 		title = "Edit directory (Enter submit, Esc cancel)"
 	} else if a.inputMode == inputAddCollection {
 		title = "Add collection (Enter submit, Esc cancel)"
+	} else if a.inputMode == inputAddItem {
+		title = "Add file or directory (Enter submit, Esc cancel)"
 	}
 	a.drawText(x+2, y+1, dialogWidth-4, title)
 	a.drawText(x+2, y+2, dialogWidth-4, string(a.input))
@@ -766,6 +985,7 @@ func (a *App) drawDeleteConfirmation(width, height int) {
 			} else if column == 0 || column == dialogWidth-1 {
 				char = '│'
 			}
+
 			if (row == 0 || row == dialogHeight-1) && (column == 0 || column == dialogWidth-1) {
 				char = '┼'
 			}
@@ -773,6 +993,29 @@ func (a *App) drawDeleteConfirmation(width, height int) {
 		}
 	}
 	name := a.entries[a.selected].Name
+	a.drawText(x+2, y+1, dialogWidth-4, "Delete "+name+"? (Enter/y confirm, Esc/n cancel)")
+}
+
+func (a *App) drawItemDeleteConfirmation(width, height int) {
+	dialogWidth := min(70, max(34, width-4))
+	dialogHeight := 5
+	x := (width - dialogWidth) / 2
+	y := (height - dialogHeight) / 2
+	for row := 0; row < dialogHeight; row++ {
+		for column := 0; column < dialogWidth; column++ {
+			char := ' '
+			if row == 0 || row == dialogHeight-1 {
+				char = '─'
+			} else if column == 0 || column == dialogWidth-1 {
+				char = '│'
+			}
+			if (row == 0 || row == dialogHeight-1) && (column == 0 || column == dialogWidth-1) {
+				char = '┼'
+			}
+			a.screen.SetContent(x+column, y+row, char, nil, tcell.StyleDefault)
+		}
+	}
+	name := a.current.Items[a.itemSelected].Name()
 	a.drawText(x+2, y+1, dialogWidth-4, "Delete "+name+"? (Enter/y confirm, Esc/n cancel)")
 }
 

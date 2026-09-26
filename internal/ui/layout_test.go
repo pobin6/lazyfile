@@ -208,11 +208,13 @@ func TestCollectionNavigationAndPageSwitching(t *testing.T) {
 }
 
 func TestSecondColumnDirectoryNavigationPersistsState(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	child := filepath.Join(root, "child")
 	if err := os.Mkdir(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	app := App{
 		entries:    []config.Entry{{Name: "root", Path: root, CurrentPath: root}},
 		selected:   0,
@@ -236,5 +238,80 @@ func TestSecondColumnDirectoryNavigationPersistsState(t *testing.T) {
 	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "h", tcell.ModNone))
 	if app.current.Path != root {
 		t.Fatalf("parent navigation crossed entry root: %q", app.current.Path)
+	}
+}
+
+func TestCopyCutAndPasteItems(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	source := filepath.Join(root, "source.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := t.TempDir()
+	cutDestination := t.TempDir()
+	app := App{
+		current:    filesystem.Directory{Path: root},
+		focusedCol: 1,
+	}
+	app.current, _ = filesystem.Load(root, root)
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "y", tcell.ModNone))
+	if app.clipboardPath != source || app.clipboardCut {
+		t.Fatalf("yank state = %q, cut=%t", app.clipboardPath, app.clipboardCut)
+	}
+	app.current, _ = filesystem.Load(destination, destination)
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "p", tcell.ModNone))
+	if data, err := os.ReadFile(filepath.Join(destination, "source.txt")); err != nil || string(data) != "content" {
+		t.Fatalf("pasted file = %q, err=%v", data, err)
+	}
+
+	app.current, _ = filesystem.Load(root, root)
+	app.itemSelected = 0
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "x", tcell.ModNone))
+	if app.clipboardPath != source || !app.clipboardCut {
+		t.Fatalf("cut state = %q, cut=%t", app.clipboardPath, app.clipboardCut)
+	}
+	app.current, _ = filesystem.Load(cutDestination, cutDestination)
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "p", tcell.ModNone))
+	if _, err := os.Stat(filepath.Join(root, "source.txt")); !os.IsNotExist(err) {
+		t.Fatalf("cut source still exists, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cutDestination, "source.txt")); err != nil {
+		t.Fatalf("cut destination missing: %v", err)
+	}
+}
+
+func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
+	root := t.TempDir()
+	app := App{focusedCol: 1}
+	app.current, _ = filesystem.Load(root, root)
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "a", tcell.ModNone))
+	for _, key := range []string{"n", "o", "t", "e", ".", "t", "x", "t"} {
+		app.handleKey(tcell.NewEventKey(tcell.KeyRune, key, tcell.ModNone))
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+	if _, err := os.Stat(filepath.Join(root, "note.txt")); err != nil {
+		t.Fatalf("file was not created: %v", err)
+	}
+
+	app.createItem("a/b")
+	if info, err := os.Stat(filepath.Join(root, "a", "b")); err != nil || !info.IsDir() {
+		t.Fatalf("directory was not created: info=%v err=%v message=%q", info, err, app.errorMessage)
+	}
+
+	for index, item := range app.current.Items {
+		if item.Name() == "note.txt" {
+			app.itemSelected = index
+		}
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "d", tcell.ModNone))
+	if !app.confirmItemDelete {
+		t.Fatalf("delete confirmation did not open: focus=%d items=%d selected=%d", app.focusedCol, len(app.current.Items), app.itemSelected)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "y", tcell.ModNone))
+	if _, err := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
+		t.Fatalf("file was not deleted: %v", err)
 	}
 }
