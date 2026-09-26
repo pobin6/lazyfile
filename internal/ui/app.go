@@ -13,7 +13,11 @@ import (
 	"github.com/gdamore/tcell/v3"
 )
 
-const maxPreviewBytes = 1024
+const (
+	maxPreviewBytes = 1024
+	footerHeight    = 5
+	maxLogEntries   = 100
+)
 
 type App struct {
 	screen             tcell.Screen
@@ -35,7 +39,11 @@ type App struct {
 	itemScroll         int
 	previewOffset      int
 	clipboardPath      string
+	clipboardPaths     []string
 	clipboardCut       bool
+	clipboardDir       string
+	clipboardIndex     int
+	operationLog       []string
 }
 
 type inputMode int
@@ -100,6 +108,16 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 	}
 	if a.inputOpen {
 		return a.handleInputKey(event)
+	}
+	if a.focusedCol == 1 {
+		switch event.Key() {
+		case tcell.KeyCtrlY:
+			a.selectClipboardItem(false, tcell.ModCtrl)
+			return false
+		case tcell.KeyCtrlX:
+			a.selectClipboardItem(true, tcell.ModCtrl)
+			return false
+		}
 	}
 
 	switch event.Key() {
@@ -173,11 +191,19 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			}
 		case "y":
 			if a.focusedCol == 1 {
-				a.yankItem()
+				a.selectClipboardItem(false, event.Modifiers())
+			}
+		case "Y":
+			if a.focusedCol == 1 {
+				a.selectClipboardItem(false, event.Modifiers()|tcell.ModShift)
 			}
 		case "x":
 			if a.focusedCol == 1 {
-				a.cutItem()
+				a.selectClipboardItem(true, event.Modifiers())
+			}
+		case "X":
+			if a.focusedCol == 1 {
+				a.selectClipboardItem(true, event.Modifiers()|tcell.ModShift)
 			}
 		case "p":
 			if a.focusedCol == 1 {
@@ -395,72 +421,121 @@ func (a *App) navigateTo(path string) {
 	a.itemScroll = 0
 	a.previewOffset = 0
 	a.errorMessage = ""
+	a.addLog("cd %s", directory.Path)
 	if err := a.saveState(); err != nil {
 		a.errorMessage = err.Error()
 	}
 }
 
 func (a *App) yankItem() {
-	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
-		return
-	}
-	a.clipboardPath = filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
-	a.clipboardCut = false
-	a.errorMessage = "Selected: " + filepath.Base(a.clipboardPath)
+	a.selectClipboardItem(false, tcell.ModNone)
 }
 
 func (a *App) cutItem() {
+	a.selectClipboardItem(true, tcell.ModNone)
+}
+
+func (a *App) selectClipboardItem(cut bool, modifiers tcell.ModMask) {
 	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
 		return
 	}
-	a.clipboardPath = filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
-	a.clipboardCut = true
-	a.errorMessage = "Cut: " + filepath.Base(a.clipboardPath)
+	currentPath := filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
+	appendSelection := modifiers&tcell.ModCtrl != 0 && a.clipboardCut == cut
+	rangeSelection := modifiers&tcell.ModShift != 0 && a.clipboardCut == cut && a.clipboardDir == a.current.Path
+	if !appendSelection && !rangeSelection {
+		a.clipboardPaths = nil
+	}
+	if rangeSelection {
+		start := a.clipboardIndex
+		end := a.itemSelected
+		if start > end {
+			start, end = end, start
+		}
+		for index := start; index <= end; index++ {
+			a.addClipboardPath(filepath.Join(a.current.Path, a.current.Items[index].Name()))
+		}
+	} else {
+		a.addClipboardPath(currentPath)
+	}
+	a.clipboardCut = cut
+	a.clipboardDir = a.current.Path
+	a.clipboardIndex = a.itemSelected
+	a.clipboardPath = currentPath
+	a.errorMessage = fmt.Sprintf("Selected %d item(s)", len(a.clipboardPaths))
+	operation := "copy-select"
+	if cut {
+		operation = "cut-select"
+	}
+	a.addLog("%s %s (%d selected)", operation, currentPath, len(a.clipboardPaths))
 }
 
-func (a *App) pasteItem() {
-	if a.clipboardPath == "" {
-		a.errorMessage = "No item selected"
-		return
+func (a *App) addLog(command string, args ...any) {
+	a.operationLog = append(a.operationLog, fmt.Sprintf(command, args...))
+	if len(a.operationLog) > maxLogEntries {
+		a.operationLog = append([]string(nil), a.operationLog[len(a.operationLog)-maxLogEntries:]...)
 	}
-	source := filepath.Clean(a.clipboardPath)
-	destination := filepath.Join(a.current.Path, filepath.Base(source))
-	if source == destination {
-		a.errorMessage = "Cannot paste an item onto itself"
-		return
-	}
-	if _, err := os.Stat(destination); err == nil {
-		a.errorMessage = "Destination already exists: " + filepath.Base(destination)
-		return
-	} else if !os.IsNotExist(err) {
-		a.errorMessage = fmt.Errorf("check destination: %w", err).Error()
-		return
-	}
-	if info, err := os.Stat(source); err != nil {
-		a.errorMessage = fmt.Errorf("stat selected item: %w", err).Error()
-		return
-	} else if info.IsDir() {
-		if isWithinRoot(source, destination) {
-			a.errorMessage = "Cannot paste a directory into itself"
+}
+
+func (a *App) addClipboardPath(path string) {
+	for _, selected := range a.clipboardPaths {
+		if selected == path {
 			return
 		}
 	}
-	var err error
-	if a.clipboardCut {
-		err = os.Rename(source, destination)
-	} else {
-		err = copyItem(source, destination)
-	}
-	if err != nil {
-		a.errorMessage = fmt.Errorf("paste item: %w", err).Error()
+	a.clipboardPaths = append(a.clipboardPaths, path)
+}
+
+func (a *App) pasteItem() {
+	if len(a.clipboardPaths) == 0 {
+		a.errorMessage = "No item selected"
 		return
+	}
+	for _, selected := range a.clipboardPaths {
+		source := filepath.Clean(selected)
+		destination := filepath.Join(a.current.Path, filepath.Base(source))
+		if source == destination {
+			a.errorMessage = "Cannot paste an item onto itself"
+			return
+		}
+		if _, err := os.Stat(destination); err == nil {
+			a.errorMessage = "Destination already exists: " + filepath.Base(destination)
+			return
+		} else if !os.IsNotExist(err) {
+			a.errorMessage = fmt.Errorf("check destination: %w", err).Error()
+			return
+		}
+		info, err := os.Stat(source)
+		if err != nil {
+			a.errorMessage = fmt.Errorf("stat selected item: %w", err).Error()
+			return
+		}
+		if info.IsDir() && isWithinRoot(source, destination) {
+			a.errorMessage = "Cannot paste a directory into itself"
+			return
+		}
+		if a.clipboardCut {
+			err = os.Rename(source, destination)
+		} else {
+			err = copyItem(source, destination)
+		}
+		if err != nil {
+			a.errorMessage = fmt.Errorf("paste item: %w", err).Error()
+			return
+		}
+		if a.clipboardCut {
+			a.addLog("mv %s %s", source, destination)
+		} else if info.IsDir() {
+			a.addLog("cp -r %s %s", source, destination)
+		} else {
+			a.addLog("cp %s %s", source, destination)
+		}
 	}
 	if a.clipboardCut {
 		a.clipboardPath = ""
+		a.clipboardPaths = nil
 		a.clipboardCut = false
 	}
-	selectedName := filepath.Base(destination)
-	if err := a.refreshCurrent(selectedName); err != nil {
+	if err := a.refreshCurrent(""); err != nil {
 		a.errorMessage = err.Error()
 		return
 	}
@@ -567,6 +642,7 @@ func (a *App) deleteSelected() {
 	if len(a.entries) == 0 {
 		return
 	}
+	a.addLog("bookmark-rm %s", a.entries[a.selected].Path)
 	a.entries = append(a.entries[:a.selected], a.entries[a.selected+1:]...)
 	if len(a.collections) > 0 {
 		a.collections[a.selectedCollection].Entries = a.entries
@@ -604,10 +680,12 @@ func (a *App) deleteCurrentItem() {
 		return
 	}
 	name := a.current.Items[a.itemSelected].Name()
-	if err := os.RemoveAll(filepath.Join(a.current.Path, name)); err != nil {
+	path := filepath.Join(a.current.Path, name)
+	if err := os.RemoveAll(path); err != nil {
 		a.errorMessage = fmt.Errorf("delete item: %w", err).Error()
 		return
 	}
+	a.addLog("rm -r %s", path)
 	if err := a.refreshCurrent(""); err != nil {
 		a.errorMessage = err.Error()
 		return
@@ -644,6 +722,7 @@ func (a *App) submitPath() {
 		a.selected = 0
 		a.current = filesystem.Directory{}
 		a.collectionPage = true
+		a.addLog("collection-add %q", name)
 		a.inputOpen = false
 		a.input = nil
 		a.errorMessage = ""
@@ -669,10 +748,12 @@ func (a *App) submitPath() {
 			CurrentPath: directory.Path,
 		})
 		a.selected = len(a.entries) - 1
+		a.addLog("bookmark-add %s", directory.Path)
 	case inputEdit:
 		a.entries[a.selected].Path = directory.Path
 		a.entries[a.selected].Name = directory.Name
 		a.entries[a.selected].CurrentPath = directory.Path
+		a.addLog("bookmark-edit %s", directory.Path)
 	}
 	if len(a.collections) > 0 {
 		a.collections[a.selectedCollection].Entries = a.entries
@@ -718,6 +799,11 @@ func (a *App) createItem(name string) {
 		a.errorMessage = fmt.Errorf("create item: %w", err).Error()
 		return
 	}
+	if strings.Contains(name, "/") {
+		a.addLog("mkdir -p %s", destination)
+	} else {
+		a.addLog("touch %s", destination)
+	}
 	if err := a.refreshCurrent(filepath.Base(destination)); err != nil {
 		a.errorMessage = err.Error()
 		return
@@ -733,14 +819,21 @@ func (a *App) draw() {
 	layout := calculateLayout(width)
 	a.drawPathBar(width)
 
-	a.drawColumnBorders(layout, height)
+	mainHeight := height
+	panesHeight := 0
+	if height >= 10 {
+		panesHeight = footerHeight
+		mainHeight -= panesHeight
+	}
+	a.drawColumnBorders(layout, mainHeight)
 
 	firstColumnEntries := a.entries
 	if a.collectionPage {
 		firstColumnEntries = nil
 	}
+	visibleListRows := max(0, mainHeight-5)
 	for index, entry := range firstColumnEntries {
-		if index >= height-3 {
+		if index >= visibleListRows {
 			break
 		}
 		style := tcell.StyleDefault
@@ -751,7 +844,7 @@ func (a *App) draw() {
 	}
 	if a.collectionPage {
 		for index, collection := range a.collections {
-			if index >= height-3 {
+			if index >= visibleListRows {
 				break
 			}
 			style := tcell.StyleDefault
@@ -761,7 +854,7 @@ func (a *App) draw() {
 			a.drawStyledText(1, index+4, layout.LeftWidth-2, collection.Name, style)
 		}
 	}
-	visibleItemRows := height - 5
+	visibleItemRows := max(0, mainHeight-5)
 	a.ensureItemVisible(visibleItemRows)
 	for index := a.itemScroll; index < len(a.current.Items); index++ {
 		if index-a.itemScroll >= visibleItemRows {
@@ -769,15 +862,25 @@ func (a *App) draw() {
 		}
 		item := a.current.Items[index]
 		style := tcell.StyleDefault
+		if a.isClipboardSelected(filepath.Join(a.current.Path, item.Name())) {
+			if a.clipboardCut {
+				style = style.Foreground(tcell.ColorRed).Bold(true)
+			} else {
+				style = style.Foreground(tcell.ColorGreen).Bold(true)
+			}
+		}
 		if a.focusedCol == 1 && index == a.itemSelected {
 			style = style.Reverse(true)
 		}
 		a.drawStyledText(layout.LeftWidth+1, index-a.itemScroll+4, layout.MiddleWidth-2, item.Name(), style)
 	}
-	a.drawPreview(layout, height)
+	a.drawPreview(layout, mainHeight)
 
 	if a.errorMessage != "" {
-		a.drawText(1, height-2, width-2, "Error: "+a.errorMessage)
+		a.drawText(1, mainHeight-2, width-2, "Error: "+a.errorMessage)
+	}
+	if panesHeight > 0 {
+		a.drawFooterPanes(width, mainHeight, height)
 	}
 
 	if a.inputOpen {
@@ -790,6 +893,115 @@ func (a *App) draw() {
 		a.drawItemDeleteConfirmation(width, height)
 	}
 	a.screen.Show()
+}
+
+func (a *App) isClipboardSelected(path string) bool {
+	path = filepath.Clean(path)
+	for _, selected := range a.clipboardPaths {
+		if filepath.Clean(selected) == path {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) drawFooterPanes(width, top, bottom int) {
+	firstWidth := width / 3
+	secondWidth := width / 3
+	thirdWidth := width - firstWidth - secondWidth
+	widths := []int{firstWidth, secondWidth, thirdWidth}
+	titles := []string{"File Info", "Operation Log", "Clipboard"}
+	x := 0
+	for index, paneWidth := range widths {
+		lines := [][]string{
+			a.selectedItemInfo(),
+			a.operationLogLines(),
+			a.clipboardLines(),
+		}[index]
+		title := titles[index]
+		if index == 2 && len(a.clipboardPaths) > 0 {
+			mode := "Copy"
+			if a.clipboardCut {
+				mode = "Cut"
+			}
+			title = fmt.Sprintf("Clipboard: %s (%d)", mode, len(a.clipboardPaths))
+		}
+		a.drawFooterPane(x, paneWidth, top, bottom, title, lines)
+		x += paneWidth
+	}
+}
+
+func (a *App) drawFooterPane(x, width, top, bottom int, title string, lines []string) {
+	if width < 2 || bottom-top < 2 {
+		return
+	}
+	for column := x; column < x+width; column++ {
+		a.screen.SetContent(column, top, '─', nil, tcell.StyleDefault)
+		a.screen.SetContent(column, bottom-1, '─', nil, tcell.StyleDefault)
+	}
+	for row := top + 1; row < bottom-1; row++ {
+		a.screen.SetContent(x, row, '│', nil, tcell.StyleDefault)
+		a.screen.SetContent(x+width-1, row, '│', nil, tcell.StyleDefault)
+	}
+	a.screen.SetContent(x, top, '┌', nil, tcell.StyleDefault)
+	a.screen.SetContent(x+width-1, top, '┐', nil, tcell.StyleDefault)
+	a.screen.SetContent(x, bottom-1, '└', nil, tcell.StyleDefault)
+	a.screen.SetContent(x+width-1, bottom-1, '┘', nil, tcell.StyleDefault)
+	a.drawText(x+2, top, width-4, title)
+	for index, line := range lines {
+		row := top + 1 + index
+		if row >= bottom-1 {
+			break
+		}
+		a.drawText(x+1, row, width-2, line)
+	}
+}
+
+func (a *App) selectedItemInfo() []string {
+	if a.itemSelected >= len(a.current.Items) {
+		return []string{"No file selected"}
+	}
+	item := a.current.Items[a.itemSelected]
+	path := filepath.Join(a.current.Path, item.Name())
+	info, err := os.Stat(path)
+	if err != nil {
+		return []string{"Info error: " + err.Error()}
+	}
+	itemType := "File"
+	if info.IsDir() {
+		itemType = "Directory"
+	}
+	return []string{
+		"Modified: " + info.ModTime().Format("2006-01-02 15:04:05"),
+		fmt.Sprintf("Permissions: %s (%04o)", info.Mode().String(), info.Mode().Perm()),
+		fmt.Sprintf("%s | Size: %d B", itemType, info.Size()),
+	}
+}
+
+func (a *App) operationLogLines() []string {
+	if len(a.operationLog) <= 3 {
+		return append([]string(nil), a.operationLog...)
+	}
+	return append([]string(nil), a.operationLog[len(a.operationLog)-3:]...)
+}
+
+func (a *App) clipboardLines() []string {
+	if len(a.clipboardPaths) == 0 {
+		return []string{"No selected files"}
+	}
+	start := max(0, len(a.clipboardPaths)-3)
+	lines := make([]string, 0, 3)
+	for _, path := range a.clipboardPaths[start:] {
+		prefix := "COPY "
+		if a.clipboardCut {
+			prefix = "CUT  "
+		}
+		lines = append(lines, prefix+path)
+	}
+	if start > 0 {
+		lines[0] = fmt.Sprintf("... and %d more", start)
+	}
+	return lines
 }
 
 func (a *App) drawPreview(layout Layout, height int) {

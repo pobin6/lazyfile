@@ -283,6 +283,7 @@ func TestCopyCutAndPasteItems(t *testing.T) {
 }
 
 func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	app := App{focusedCol: 1}
 	app.current, _ = filesystem.Load(root, root)
@@ -291,6 +292,7 @@ func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
 	for _, key := range []string{"n", "o", "t", "e", ".", "t", "x", "t"} {
 		app.handleKey(tcell.NewEventKey(tcell.KeyRune, key, tcell.ModNone))
 	}
+
 	app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
 	if _, err := os.Stat(filepath.Join(root, "note.txt")); err != nil {
 		t.Fatalf("file was not created: %v", err)
@@ -306,6 +308,7 @@ func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
 			app.itemSelected = index
 		}
 	}
+
 	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "d", tcell.ModNone))
 	if !app.confirmItemDelete {
 		t.Fatalf("delete confirmation did not open: focus=%d items=%d selected=%d", app.focusedCol, len(app.current.Items), app.itemSelected)
@@ -313,5 +316,58 @@ func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
 	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "y", tcell.ModNone))
 	if _, err := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
 		t.Fatalf("file was not deleted: %v", err)
+	}
+}
+
+func TestMultiSelectCopyAndRangeSelection(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"one", "two", "three"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := App{focusedCol: 1}
+	app.current, _ = filesystem.Load(root, root)
+	app.itemSelected = 0
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "y", tcell.ModNone))
+	app.itemSelected = 1
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "y", tcell.ModCtrl))
+	if len(app.clipboardPaths) != 2 {
+		t.Fatalf("ctrl+y selection count = %d, want 2", len(app.clipboardPaths))
+	}
+	app.itemSelected = 2
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "Y", tcell.ModShift))
+	if len(app.clipboardPaths) != 3 {
+		t.Fatalf("shift+y selection count = %d, want 3", len(app.clipboardPaths))
+	}
+}
+
+func TestFooterPaneData(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("content"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := filesystem.Load(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{current: directory}
+	infoLines := app.selectedItemInfo()
+	if len(infoLines) != 3 || !strings.Contains(infoLines[1], "0640") {
+		t.Fatalf("file info = %q, expected permissions", infoLines)
+	}
+
+	app.addLog("touch %s", path)
+	logLines := app.operationLogLines()
+	if len(logLines) != 1 || logLines[0] != "touch "+path {
+		t.Fatalf("operation log = %q", logLines)
+	}
+
+	app.clipboardPaths = []string{path}
+	app.clipboardCut = true
+	clipboardLines := app.clipboardLines()
+	if len(clipboardLines) != 1 || !strings.HasPrefix(clipboardLines[0], "CUT  ") {
+		t.Fatalf("clipboard lines = %q", clipboardLines)
 	}
 }
