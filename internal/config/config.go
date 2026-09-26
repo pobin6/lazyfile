@@ -9,8 +9,9 @@ import (
 )
 
 type Entry struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	CurrentPath string `json:"current_path,omitempty"`
 }
 
 type Collection struct {

@@ -102,6 +102,14 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 		switch event.Str() {
 		case "q":
 			return true
+		case "0":
+			a.focusedCol = -1
+		case "1":
+			a.focusedCol = 0
+		case "2":
+			a.focusedCol = 1
+		case "3":
+			a.focusedCol = 2
 		case "a":
 			if a.focusedCol == 0 {
 				if a.collectionPage {
@@ -109,7 +117,7 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 				} else {
 					a.openInput(inputAdd)
 				}
-			} else {
+			} else if a.focusedCol == 1 || a.focusedCol == 2 {
 				a.openInput(inputPath)
 			}
 		case "e":
@@ -129,7 +137,7 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 				}
 			} else if a.focusedCol == 1 {
 				a.selectItem(1)
-			} else {
+			} else if a.focusedCol == 2 {
 				a.movePreview(1)
 			}
 		case "k":
@@ -141,13 +149,17 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 				}
 			} else if a.focusedCol == 1 {
 				a.selectItem(-1)
-			} else {
+			} else if a.focusedCol == 2 {
 				a.movePreview(-1)
 			}
 		case "h":
-			a.moveFocus(-1)
+			if a.focusedCol == 1 {
+				a.navigateParent()
+			}
 		case "l":
-			a.moveFocus(1)
+			if a.focusedCol == 1 {
+				a.navigateChild()
+			}
 		case "[":
 			if a.focusedCol == 0 {
 				a.collectionPage = true
@@ -162,10 +174,6 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 				}
 			}
 		}
-	case tcell.KeyLeft:
-		a.moveFocus(-1)
-	case tcell.KeyRight:
-		a.moveFocus(1)
 	}
 	return false
 }
@@ -272,7 +280,12 @@ func (a *App) normalizeSelection() {
 }
 
 func (a *App) loadSelected() error {
-	directory, err := filesystem.Load(a.entries[a.selected].Path, a.baseDir)
+	entry := a.entries[a.selected]
+	path := entry.Path
+	if entry.CurrentPath != "" {
+		path = entry.CurrentPath
+	}
+	directory, err := filesystem.Load(path, a.baseDir)
 	if err != nil {
 		return err
 	}
@@ -281,6 +294,68 @@ func (a *App) loadSelected() error {
 	a.itemScroll = 0
 	a.previewOffset = 0
 	return nil
+}
+
+func (a *App) navigateChild() {
+	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
+		return
+	}
+	item := a.current.Items[a.itemSelected]
+	if !item.IsDir() {
+		return
+	}
+	a.navigateTo(filepath.Join(a.current.Path, item.Name()))
+}
+
+func (a *App) navigateParent() {
+	if len(a.entries) == 0 || a.selected >= len(a.entries) {
+		return
+	}
+	rootPath, err := filepath.Abs(a.entries[a.selected].Path)
+	if err != nil || filepath.Clean(a.current.Path) == filepath.Clean(rootPath) {
+		return
+	}
+	parent := filepath.Dir(a.current.Path)
+	if !isWithinRoot(rootPath, parent) {
+		return
+	}
+	returnedItem := filepath.Base(a.current.Path)
+	a.navigateTo(parent)
+	for index, item := range a.current.Items {
+		if item.Name() == returnedItem {
+			a.itemSelected = index
+			break
+		}
+	}
+	a.previewOffset = 0
+	if err := a.saveState(); err != nil {
+		a.errorMessage = err.Error()
+	}
+}
+
+func isWithinRoot(rootPath, path string) bool {
+	relative, err := filepath.Rel(rootPath, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
+func (a *App) navigateTo(path string) {
+	directory, err := filesystem.Load(path, a.baseDir)
+	if err != nil {
+		a.errorMessage = err.Error()
+		return
+	}
+	a.current = directory
+	a.entries[a.selected].CurrentPath = directory.Path
+	a.itemSelected = 0
+	a.itemScroll = 0
+	a.previewOffset = 0
+	a.errorMessage = ""
+	if err := a.saveState(); err != nil {
+		a.errorMessage = err.Error()
+	}
 }
 
 func (a *App) selectItem(delta int) {
@@ -368,16 +443,6 @@ func (a *App) saveState() error {
 	})
 }
 
-func (a *App) moveFocus(delta int) {
-	a.focusedCol += delta
-	if a.focusedCol < 0 {
-		a.focusedCol = 0
-	}
-	if a.focusedCol > 2 {
-		a.focusedCol = 2
-	}
-}
-
 func (a *App) handleInputKey(event *tcell.EventKey) bool {
 	switch event.Key() {
 	case tcell.KeyEscape:
@@ -422,10 +487,16 @@ func (a *App) submitPath() {
 	}
 	switch a.inputMode {
 	case inputAdd:
-		a.entries = append(a.entries, config.Entry{Path: directory.Path, Name: directory.Name})
+		a.entries = append(a.entries, config.Entry{
+			Path:        directory.Path,
+			Name:        directory.Name,
+			CurrentPath: directory.Path,
+		})
 		a.selected = len(a.entries) - 1
 	case inputEdit:
-		a.entries[a.selected] = config.Entry{Path: directory.Path, Name: directory.Name}
+		a.entries[a.selected].Path = directory.Path
+		a.entries[a.selected].Name = directory.Name
+		a.entries[a.selected].CurrentPath = directory.Path
 	}
 	if len(a.collections) > 0 {
 		a.collections[a.selectedCollection].Entries = a.entries
@@ -525,6 +596,9 @@ func (a *App) drawPathBar(width int) {
 		return
 	}
 	style := tcell.StyleDefault
+	if a.focusedCol == -1 {
+		style = style.Foreground(tcell.ColorPurple).Bold(true)
+	}
 	for column := 0; column < width; column++ {
 		a.screen.SetContent(column, 0, '─', nil, style)
 		a.screen.SetContent(column, 2, '─', nil, style)
@@ -533,7 +607,7 @@ func (a *App) drawPathBar(width int) {
 	a.screen.SetContent(width-1, 0, '┐', nil, style)
 	a.screen.SetContent(0, 2, '└', nil, style)
 	a.screen.SetContent(width-1, 2, '┘', nil, style)
-	a.drawText(2, 1, width-4, a.selectedPath())
+	a.drawStyledText(2, 1, width-4, a.selectedPath(), style)
 }
 
 func (a *App) selectedPath() string {

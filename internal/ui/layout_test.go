@@ -112,29 +112,35 @@ func TestEnsureItemVisibleKeepsSelectionAwayFromViewportEdges(t *testing.T) {
 	}
 }
 
-func TestMoveFocus(t *testing.T) {
+func TestNumericFocusNavigation(t *testing.T) {
 	app := App{}
 
-	app.moveFocus(-1)
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "0", tcell.ModNone))
+	if app.focusedCol != -1 {
+		t.Fatalf("focused target = %d, want path bar (-1)", app.focusedCol)
+	}
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "1", tcell.ModNone))
 	if app.focusedCol != 0 {
 		t.Fatalf("focused column = %d, want 0", app.focusedCol)
 	}
-
-	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "l", tcell.ModNone))
-	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "l", tcell.ModNone))
-	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "l", tcell.ModNone))
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "2", tcell.ModNone))
+	if app.focusedCol != 1 {
+		t.Fatalf("focused column = %d, want 1", app.focusedCol)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "3", tcell.ModNone))
 	if app.focusedCol != 2 {
-		t.Fatalf("focused column = %d, want 2", app.focusedCol)
+		t.Fatalf("focused column = %d, want 2 after 3", app.focusedCol)
 	}
 
 	app.handleKey(tcell.NewEventKey(tcell.KeyRight, "", tcell.ModNone))
 	if app.focusedCol != 2 {
-		t.Fatalf("focused column = %d, want 2 after right clamp", app.focusedCol)
+		t.Fatalf("right arrow changed focus to %d", app.focusedCol)
 	}
 
 	app.handleKey(tcell.NewEventKey(tcell.KeyLeft, "", tcell.ModNone))
-	if app.focusedCol != 1 {
-		t.Fatalf("focused column = %d, want 1 after left", app.focusedCol)
+	if app.focusedCol != 2 {
+		t.Fatalf("left arrow changed focus to %d", app.focusedCol)
 	}
 }
 
@@ -184,6 +190,7 @@ func TestCollectionNavigationAndPageSwitching(t *testing.T) {
 		collectionPage: true,
 		focusedCol:     0,
 	}
+
 	app.syncCollectionEntries()
 
 	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "j", tcell.ModNone))
@@ -197,5 +204,37 @@ func TestCollectionNavigationAndPageSwitching(t *testing.T) {
 	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "[", tcell.ModNone))
 	if !app.collectionPage {
 		t.Fatal("expected collection page after [")
+	}
+}
+
+func TestSecondColumnDirectoryNavigationPersistsState(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		entries:    []config.Entry{{Name: "root", Path: root, CurrentPath: root}},
+		selected:   0,
+		focusedCol: 1,
+	}
+	app.current, _ = filesystem.Load(root, root)
+	for index, item := range app.current.Items {
+		if item.Name() == "child" {
+			app.itemSelected = index
+		}
+	}
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "l", tcell.ModNone))
+	if app.current.Path != child || app.entries[0].CurrentPath != child {
+		t.Fatalf("child navigation = %q, entry state = %q", app.current.Path, app.entries[0].CurrentPath)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "h", tcell.ModNone))
+	if app.current.Path != root || app.current.Items[app.itemSelected].Name() != "child" {
+		t.Fatalf("parent navigation = %q, want %q", app.current.Path, root)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "h", tcell.ModNone))
+	if app.current.Path != root {
+		t.Fatalf("parent navigation crossed entry root: %q", app.current.Path)
 	}
 }
