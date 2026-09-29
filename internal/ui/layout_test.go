@@ -9,6 +9,7 @@ import (
 	"lazyfile/internal/config"
 	"lazyfile/internal/filesystem"
 
+	"github.com/clipperhouse/displaywidth"
 	"github.com/gdamore/tcell/v3"
 )
 
@@ -141,6 +142,166 @@ func TestNumericFocusNavigation(t *testing.T) {
 	app.handleKey(tcell.NewEventKey(tcell.KeyLeft, "", tcell.ModNone))
 	if app.focusedCol != 2 {
 		t.Fatalf("left arrow changed focus to %d", app.focusedCol)
+	}
+}
+
+func TestEscapeClearsFileSelectionWithoutQuitting(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"one.txt", "two.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	directory, err := filesystem.Load(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		current:       directory,
+		focusedCol:    1,
+		itemSelected:  1,
+		previewOffset: 2,
+	}
+
+	if shouldQuit := app.handleKey(tcell.NewEventKey(tcell.KeyEscape, "", tcell.ModNone)); shouldQuit {
+		t.Fatal("Escape requested application quit")
+	}
+	if app.itemSelected != len(app.current.Items) {
+		t.Fatalf("item selection = %d, want empty selection sentinel %d", app.itemSelected, len(app.current.Items))
+	}
+	if app.previewOffset != 0 {
+		t.Fatalf("preview offset = %d, want 0 after clearing selection", app.previewOffset)
+	}
+	if got := app.previewLines(); len(got) != 0 {
+		t.Fatalf("preview lines = %q, want none after clearing selection", got)
+	}
+	if got := app.selectedItemInfo(); len(got) != 1 || got[0] != "No file selected" {
+		t.Fatalf("selected item info = %q, want no file selected", got)
+	}
+
+	app.selectItem(1)
+	if app.itemSelected != 0 {
+		t.Fatalf("item selection after j = %d, want first item (0)", app.itemSelected)
+	}
+}
+
+func TestSearchFilesByPartialNameAndNavigateMatches(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"report-one.txt", "report-two.txt", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	directory, err := filesystem.Load(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{current: directory, focusedCol: 1}
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "/", tcell.ModNone))
+	for _, character := range "REPORT-" {
+		app.handleKey(tcell.NewEventKey(tcell.KeyRune, string(character), tcell.ModNone))
+	}
+	if len(app.searchMatches) != 2 {
+		t.Fatalf("search matches = %v, want two case-insensitive matches", app.searchMatches)
+	}
+	first, second := app.searchMatches[0], app.searchMatches[1]
+	if !app.isCurrentSearchMatch(1, first) || !app.isSearchMatch(1, second) {
+		t.Fatalf("search match highlighting not set for first and subsequent results: %v", app.searchMatches)
+	}
+	if app.isSearchMatch(0, first) {
+		t.Fatal("Files search incorrectly matched the first column")
+	}
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+	if app.searchInput || app.itemSelected != first {
+		t.Fatalf("search enter state: input=%t selected=%d, want false and %d", app.searchInput, app.itemSelected, first)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "n", tcell.ModNone))
+	if app.itemSelected != second {
+		t.Fatalf("n selected item %d, want next match %d", app.itemSelected, second)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "N", tcell.ModNone))
+	if app.itemSelected != first {
+		t.Fatalf("N selected item %d, want previous match %d", app.itemSelected, first)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyEscape, "", tcell.ModNone))
+	if app.searchQuery != "" || len(app.searchMatches) != 0 {
+		t.Fatalf("Escape did not clear search: query=%q matches=%v", app.searchQuery, app.searchMatches)
+	}
+}
+
+func TestSearchFirstColumnAndSearchByFileLineNumber(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	app := App{
+		focusedCol:     0,
+		collectionPage: true,
+		collections: []config.Collection{
+			{Name: "Work"},
+			{Name: "Work archive"},
+			{Name: "Personal"},
+		},
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "/", tcell.ModNone))
+	for _, character := range "work" {
+		app.handleKey(tcell.NewEventKey(tcell.KeyRune, string(character), tcell.ModNone))
+	}
+	if len(app.searchMatches) != 2 || app.isSearchMatch(1, 0) {
+		t.Fatalf("first-column matches = %v, expected two matches isolated to column one", app.searchMatches)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+	if app.selectedCollection != 0 {
+		t.Fatalf("first matched collection = %d, want 0", app.selectedCollection)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "n", tcell.ModNone))
+	if app.selectedCollection != 1 {
+		t.Fatalf("next collection match = %d, want 1", app.selectedCollection)
+	}
+
+	entryRoot := t.TempDir()
+	firstPath := filepath.Join(entryRoot, "docs")
+	secondPath := filepath.Join(entryRoot, "docs archive")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app = App{
+		baseDir:    entryRoot,
+		focusedCol: 0,
+		entries: []config.Entry{
+			{Name: "docs", Path: firstPath},
+			{Name: "docs archive", Path: secondPath},
+		},
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "/", tcell.ModNone))
+	for _, character := range "docs" {
+		app.handleKey(tcell.NewEventKey(tcell.KeyRune, string(character), tcell.ModNone))
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+	if app.selected != 0 || app.current.Path != firstPath {
+		t.Fatalf("first bookmark match selected=%d path=%q, want index 0 path %q", app.selected, app.current.Path, firstPath)
+	}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "n", tcell.ModNone))
+	if app.selected != 1 || app.current.Path != secondPath {
+		t.Fatalf("next bookmark match selected=%d path=%q, want index 1 path %q", app.selected, app.current.Path, secondPath)
+	}
+
+	root := t.TempDir()
+	for _, name := range []string{"alpha.txt", "bravo.txt", "charlie.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	directory, err := filesystem.Load(root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app = App{current: directory, focusedCol: 1}
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "/", tcell.ModNone))
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "2", tcell.ModNone))
+	if len(app.searchMatches) != 1 || directory.Items[app.searchMatches[0]].Name() != "bravo.txt" {
+		t.Fatalf("search by line number matches = %v", app.searchMatches)
 	}
 }
 
@@ -369,5 +530,68 @@ func TestFooterPaneData(t *testing.T) {
 	clipboardLines := app.clipboardLines()
 	if len(clipboardLines) != 1 || !strings.HasPrefix(clipboardLines[0], "CUT  ") {
 		t.Fatalf("clipboard lines = %q", clipboardLines)
+	}
+}
+
+func TestShortcutHintByFocusedModule(t *testing.T) {
+	tests := []struct {
+		name           string
+		focusedCol     int
+		collectionPage bool
+		contains       []string
+	}{
+		{
+			name:       "path bar",
+			focusedCol: -1,
+			contains:   []string{"a 输入路径", "q 退出"},
+		},
+		{
+			name:           "collections",
+			focusedCol:     0,
+			collectionPage: true,
+			contains:       []string{"a 新增集合", "] 目录页"},
+		},
+		{
+			name:       "directories",
+			focusedCol: 0,
+			contains:   []string{"a 新增条目", "e 编辑", "d 删除"},
+		},
+		{
+			name:       "files",
+			focusedCol: 1,
+			contains:   []string{"a 新增", "d 删除", "y 复制", "x 剪切", "p 粘贴"},
+		},
+		{
+			name:       "preview",
+			focusedCol: 2,
+			contains:   []string{"j/k 滚动预览"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			app := App{focusedCol: test.focusedCol, collectionPage: test.collectionPage}
+			hint := app.shortcutHint()
+			for _, expected := range test.contains {
+				if !strings.Contains(hint, expected) {
+					t.Errorf("shortcut hint %q does not contain %q", hint, expected)
+				}
+			}
+		})
+	}
+}
+
+func TestDrawShortcutHintTruncatesToTerminalWidth(t *testing.T) {
+	const width = 12
+	hint := truncateShortcutHint((&App{focusedCol: 1}).shortcutHint(), width)
+	if displaywidth.String(hint) > width {
+		t.Fatalf("truncated hint width = %d, want at most %d", displaywidth.String(hint), width)
+	}
+	if !strings.HasSuffix(hint, "…") {
+		t.Fatalf("truncated hint = %q, want ellipsis suffix", hint)
+	}
+
+	if got := truncateShortcutHint("a 新增", width); got != "a 新增" {
+		t.Fatalf("short hint = %q, want unchanged", got)
 	}
 }

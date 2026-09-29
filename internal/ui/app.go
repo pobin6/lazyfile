@@ -10,13 +10,15 @@ import (
 	"lazyfile/internal/config"
 	"lazyfile/internal/filesystem"
 
+	"github.com/clipperhouse/displaywidth"
 	"github.com/gdamore/tcell/v3"
 )
 
 const (
-	maxPreviewBytes = 1024
-	footerHeight    = 5
-	maxLogEntries   = 100
+	maxPreviewBytes   = 1024
+	footerHeight      = 5
+	shortcutRowHeight = 1
+	maxLogEntries     = 100
 )
 
 type App struct {
@@ -44,6 +46,11 @@ type App struct {
 	clipboardDir       string
 	clipboardIndex     int
 	operationLog       []string
+	searchCol          int
+	searchQuery        string
+	searchInput        bool
+	searchMatches      []int
+	searchMatchIndex   int
 }
 
 type inputMode int
@@ -109,6 +116,10 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 	if a.inputOpen {
 		return a.handleInputKey(event)
 	}
+	if a.searchInput {
+		a.handleSearchInputKey(event)
+		return false
+	}
 	if a.focusedCol == 1 {
 		switch event.Key() {
 		case tcell.KeyCtrlY:
@@ -121,8 +132,15 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 	}
 
 	switch event.Key() {
-	case tcell.KeyCtrlC, tcell.KeyEscape:
+	case tcell.KeyCtrlC:
 		return true
+	case tcell.KeyEscape:
+		if a.searchQuery != "" || a.searchInput {
+			a.clearSearch()
+		} else {
+			a.clearItemSelection()
+		}
+		return false
 	case tcell.KeyRune:
 		switch event.Str() {
 		case "q":
@@ -135,6 +153,18 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			a.focusedCol = 1
 		case "3":
 			a.focusedCol = 2
+		case "/":
+			if a.focusedCol == 0 || a.focusedCol == 1 {
+				a.startSearch()
+			}
+		case "n":
+			if a.searchQuery != "" && a.focusedCol == a.searchCol {
+				a.moveSearchMatch(1)
+			}
+		case "N":
+			if a.searchQuery != "" && a.focusedCol == a.searchCol {
+				a.moveSearchMatch(-1)
+			}
 		case "a":
 			if a.focusedCol == 0 {
 				if a.collectionPage {
@@ -211,11 +241,13 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 			}
 		case "[":
 			if a.focusedCol == 0 {
+				a.clearSearch()
 				a.collectionPage = true
 				a.syncCollectionEntries()
 			}
 		case "]":
 			if a.focusedCol == 0 {
+				a.clearSearch()
 				a.collectionPage = false
 				a.syncCollectionEntries()
 				if len(a.entries) > 0 {
@@ -225,6 +257,129 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 		}
 	}
 	return false
+}
+
+func (a *App) startSearch() {
+	a.searchCol = a.focusedCol
+	a.searchQuery = ""
+	a.searchInput = true
+	a.searchMatches = nil
+	a.searchMatchIndex = 0
+}
+
+func (a *App) handleSearchInputKey(event *tcell.EventKey) {
+	switch event.Key() {
+	case tcell.KeyEscape:
+		a.clearSearch()
+	case tcell.KeyEnter:
+		a.searchInput = false
+		if len(a.searchMatches) > 0 {
+			a.searchMatchIndex = 0
+			a.selectSearchMatch(a.searchMatches[0])
+		}
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		runes := []rune(a.searchQuery)
+		if len(runes) > 0 {
+			a.searchQuery = string(runes[:len(runes)-1])
+			a.updateSearchMatches()
+		}
+	case tcell.KeyRune:
+		a.searchQuery += event.Str()
+		a.updateSearchMatches()
+	}
+}
+
+func (a *App) clearSearch() {
+	a.searchInput = false
+	a.searchQuery = ""
+	a.searchMatches = nil
+	a.searchMatchIndex = 0
+}
+
+func (a *App) updateSearchMatches() {
+	a.searchMatches = nil
+	a.searchMatchIndex = 0
+	if a.searchQuery == "" {
+		return
+	}
+	query := strings.ToLower(a.searchQuery)
+	for index, name := range a.searchableNames() {
+		if strings.Contains(strings.ToLower(name), query) {
+			a.searchMatches = append(a.searchMatches, index)
+		}
+	}
+}
+
+func (a *App) searchableNames() []string {
+	if a.searchCol == 0 {
+		if a.collectionPage {
+			names := make([]string, 0, len(a.collections))
+			for _, collection := range a.collections {
+				names = append(names, collection.Name)
+			}
+			return names
+		}
+		names := make([]string, 0, len(a.entries))
+		for _, entry := range a.entries {
+			names = append(names, entry.Name)
+		}
+		return names
+	}
+	names := make([]string, 0, len(a.current.Items))
+	for _, item := range a.current.Items {
+		names = append(names, fmt.Sprintf("%s %d", item.Name(), len(names)+1))
+	}
+	return names
+}
+
+func (a *App) moveSearchMatch(delta int) {
+	if len(a.searchMatches) == 0 {
+		return
+	}
+	a.searchMatchIndex = (a.searchMatchIndex + delta + len(a.searchMatches)) % len(a.searchMatches)
+	a.selectSearchMatch(a.searchMatches[a.searchMatchIndex])
+}
+
+func (a *App) selectSearchMatch(index int) {
+	if a.searchCol == 0 {
+		if a.collectionPage {
+			a.selectedCollection = index
+			a.syncCollectionEntries()
+			if err := a.saveState(); err != nil {
+				a.errorMessage = err.Error()
+			}
+			return
+		}
+		if index < 0 || index >= len(a.entries) {
+			return
+		}
+		a.selected = index
+		if err := a.loadSelected(); err != nil {
+			a.errorMessage = err.Error()
+		}
+		if err := a.saveState(); err != nil {
+			a.errorMessage = err.Error()
+		}
+		return
+	}
+	if index < 0 || index >= len(a.current.Items) {
+		return
+	}
+	a.itemSelected = index
+	a.previewOffset = 0
+	a.ensureItemVisible(a.visibleItemRows())
+}
+
+func (a *App) visibleItemRows() int {
+	if a.screen == nil {
+		return len(a.current.Items)
+	}
+	_, height := a.screen.Size()
+	mainHeight := height - shortcutRowHeight
+	if height >= footerHeight+shortcutRowHeight+5 {
+		mainHeight -= footerHeight
+	}
+	return max(0, mainHeight-5)
 }
 
 func (a *App) handleDeleteConfirmation(event *tcell.EventKey) bool {
@@ -348,6 +503,9 @@ func (a *App) normalizeSelection() {
 }
 
 func (a *App) loadSelected() error {
+	if a.searchCol == 1 {
+		a.clearSearch()
+	}
 	entry := a.entries[a.selected]
 	path := entry.Path
 	if entry.CurrentPath != "" {
@@ -410,6 +568,9 @@ func isWithinRoot(rootPath, path string) bool {
 }
 
 func (a *App) navigateTo(path string) {
+	if a.searchCol == 1 {
+		a.clearSearch()
+	}
 	directory, err := filesystem.Load(path, a.baseDir)
 	if err != nil {
 		a.errorMessage = err.Error()
@@ -570,6 +731,9 @@ func copyItem(source, destination string) error {
 }
 
 func (a *App) refreshCurrent(selectedName string) error {
+	if a.searchCol == 1 {
+		a.clearSearch()
+	}
 	directory, err := filesystem.Load(a.current.Path, a.baseDir)
 	if err != nil {
 		return err
@@ -591,6 +755,15 @@ func (a *App) selectItem(delta int) {
 	if len(a.current.Items) == 0 {
 		return
 	}
+	if a.itemSelected >= len(a.current.Items) {
+		if delta > 0 {
+			a.itemSelected = 0
+		} else {
+			a.itemSelected = len(a.current.Items) - 1
+		}
+		a.previewOffset = 0
+		return
+	}
 	a.itemSelected += delta
 	if a.itemSelected < 0 {
 		a.itemSelected = 0
@@ -601,8 +774,13 @@ func (a *App) selectItem(delta int) {
 	a.previewOffset = 0
 }
 
+func (a *App) clearItemSelection() {
+	a.itemSelected = len(a.current.Items)
+	a.previewOffset = 0
+}
+
 func (a *App) ensureItemVisible(visibleRows int) {
-	if len(a.current.Items) == 0 || visibleRows <= 0 {
+	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) || visibleRows <= 0 {
 		return
 	}
 	maxOffset := len(a.current.Items) - visibleRows
@@ -819,9 +997,9 @@ func (a *App) draw() {
 	layout := calculateLayout(width)
 	a.drawPathBar(width)
 
-	mainHeight := height
+	mainHeight := height - shortcutRowHeight
 	panesHeight := 0
-	if height >= 10 {
+	if height >= footerHeight+shortcutRowHeight+5 {
 		panesHeight = footerHeight
 		mainHeight -= panesHeight
 	}
@@ -837,7 +1015,12 @@ func (a *App) draw() {
 			break
 		}
 		style := tcell.StyleDefault
-		if a.focusedCol == 0 && index == a.selected {
+		if a.isSearchMatch(0, index) {
+			style = searchMatchStyle
+		}
+		if a.isCurrentSearchMatch(0, index) {
+			style = currentSearchMatchStyle
+		} else if a.focusedCol == 0 && index == a.selected {
 			style = style.Reverse(true)
 		}
 		a.drawStyledText(1, index+4, layout.LeftWidth-2, entry.Name, style)
@@ -848,19 +1031,30 @@ func (a *App) draw() {
 				break
 			}
 			style := tcell.StyleDefault
-			if a.focusedCol == 0 && index == a.selectedCollection {
+			if a.isSearchMatch(0, index) {
+				style = searchMatchStyle
+			}
+			if a.isCurrentSearchMatch(0, index) {
+				style = currentSearchMatchStyle
+			} else if a.focusedCol == 0 && index == a.selectedCollection {
 				style = style.Reverse(true)
 			}
 			a.drawStyledText(1, index+4, layout.LeftWidth-2, collection.Name, style)
 		}
 	}
-	visibleItemRows := max(0, mainHeight-5)
+	visibleItemRows := a.visibleItemRows()
 	a.ensureItemVisible(visibleItemRows)
 	for index := a.itemScroll; index < len(a.current.Items); index++ {
 		if index-a.itemScroll >= visibleItemRows {
 			break
 		}
 		item := a.current.Items[index]
+		row := index - a.itemScroll + 4
+		lineNumber := fmt.Sprintf("[%d]", index+1)
+		numberStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
+		a.drawStyledText(layout.LeftWidth+1, row, layout.MiddleWidth-2, lineNumber, numberStyle)
+		nameX := layout.LeftWidth + 1 + displaywidth.String(lineNumber) + 1
+		nameWidth := layout.MiddleWidth - 2 - (nameX - (layout.LeftWidth + 1))
 		style := tcell.StyleDefault
 		if a.isClipboardSelected(filepath.Join(a.current.Path, item.Name())) {
 			if a.clipboardCut {
@@ -869,10 +1063,15 @@ func (a *App) draw() {
 				style = style.Foreground(tcell.ColorGreen).Bold(true)
 			}
 		}
-		if a.focusedCol == 1 && index == a.itemSelected {
+		if a.isSearchMatch(1, index) {
+			style = searchMatchStyle
+		}
+		if a.isCurrentSearchMatch(1, index) {
+			style = currentSearchMatchStyle
+		} else if a.focusedCol == 1 && index == a.itemSelected {
 			style = style.Reverse(true)
 		}
-		a.drawStyledText(layout.LeftWidth+1, index-a.itemScroll+4, layout.MiddleWidth-2, item.Name(), style)
+		a.drawStyledText(nameX, row, nameWidth, item.Name(), style)
 	}
 	a.drawPreview(layout, mainHeight)
 
@@ -880,8 +1079,9 @@ func (a *App) draw() {
 		a.drawText(1, mainHeight-2, width-2, "Error: "+a.errorMessage)
 	}
 	if panesHeight > 0 {
-		a.drawFooterPanes(width, mainHeight, height)
+		a.drawFooterPanes(width, mainHeight, height-shortcutRowHeight)
 	}
+	a.drawShortcutHint(width, height)
 
 	if a.inputOpen {
 		a.drawInputDialog(width, height)
@@ -893,6 +1093,66 @@ func (a *App) draw() {
 		a.drawItemDeleteConfirmation(width, height)
 	}
 	a.screen.Show()
+}
+
+func (a *App) shortcutHint() string {
+	switch a.focusedCol {
+	case -1:
+		return "a 输入路径  1/2/3 切换焦点  q 退出"
+	case 0:
+		if a.collectionPage {
+			return "j/k 移动  / 搜索  n/N 匹配  a 新增集合  ] 目录页  1/2/3 切换焦点  q 退出"
+		}
+		return "j/k 移动  / 搜索  n/N 匹配  a 新增条目  e 编辑  d 删除  [ 集合页  1/2/3 切换焦点  q 退出"
+	case 1:
+		return "j/k 移动  / 搜索  n/N 匹配  h/l 上级/进入  a 新增  d 删除  y 复制  x 剪切  p 粘贴  q 退出"
+	case 2:
+		return "j/k 滚动预览  1/2/3 切换焦点  q 退出"
+	default:
+		return "1/2/3 切换焦点  q 退出"
+	}
+}
+
+func (a *App) drawShortcutHint(width, height int) {
+	if height <= 0 {
+		return
+	}
+	hintText := a.shortcutHint()
+	if a.searchInput {
+		hintText = fmt.Sprintf("/%s  Enter: select  Esc: clear", a.searchQuery)
+	}
+	hint := truncateShortcutHint(hintText, width)
+	a.drawText(0, height-shortcutRowHeight, width, hint)
+}
+
+var (
+	searchMatchStyle        = tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
+	currentSearchMatchStyle = tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(tcell.ColorYellow).Bold(true)
+)
+
+func (a *App) isSearchMatch(column, index int) bool {
+	if a.searchCol != column {
+		return false
+	}
+	for _, match := range a.searchMatches {
+		if match == index {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) isCurrentSearchMatch(column, index int) bool {
+	return a.searchCol == column && len(a.searchMatches) > 0 &&
+		a.searchMatchIndex < len(a.searchMatches) &&
+		a.searchMatches[a.searchMatchIndex] == index
+}
+
+func truncateShortcutHint(hint string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return displaywidth.TruncateString(hint, width, "…")
 }
 
 func (a *App) isClipboardSelected(path string) bool {
@@ -1089,7 +1349,7 @@ func (a *App) previewLines() []string {
 }
 
 func (a *App) drawColumnBorders(layout Layout, height int) {
-	if height <= 3 {
+	if height <= 4 {
 		return
 	}
 	borders := []struct {

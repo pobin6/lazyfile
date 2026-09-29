@@ -13,6 +13,7 @@ lazyfile is a terminal-based file manager written in Go. It provides a three-col
 - Create files and directories, delete items with confirmation, and copy or move files and directories.
 - Select multiple items for copy or cut operations.
 - View file metadata, recent operation commands, and the current clipboard selection in the bottom panes.
+- See shortcuts for the focused pane in the unbordered bottom row; long hints are truncated to fit the terminal.
 - Persist collections, bookmarks, and each bookmark's current browsing path.
 
 ## Requirements
@@ -48,6 +49,9 @@ The application starts with the saved collection and browsing state. To start wi
 | `3` | Focus the Preview pane |
 | `[` / `]` | Switch between collection and bookmark pages |
 | `j` / `k` | Move down/up in the focused pane |
+| `/` | Search in the focused Collections/Directories or Files pane; matches update as you type |
+| `n` / `N` | Move to the next/previous search match |
+| `Enter` / `Esc` | Finish search on the first match / clear the search |
 | `h` / `l` | In Files, go to the parent directory / enter the selected directory |
 | `a` | Add a collection, bookmark, file, or directory depending on the focused pane |
 | `e` | Edit the selected bookmark |
@@ -56,8 +60,9 @@ The application starts with the saved collection and browsing state. To start wi
 | `Ctrl+y` / `Ctrl+x` | Add the current item to the copy / cut selection |
 | `Shift+y` / `Shift+x` | Select a range of items for copy / cut |
 | `p` | Paste the selected items into the current Files directory |
-| `Enter` | Confirm an input or delete confirmation |
-| `Esc` | Cancel a dialog, or quit when no dialog is open |
+| `Enter` | Confirm an input, delete confirmation, or search |
+| `Esc` | Cancel a dialog, or clear the Files selection when no dialog is open |
+| `Ctrl+c` | Quit |
 | `Backspace` | Remove the last character in an input |
 
 When creating an item in Files, a name without `/` creates an empty file; a name containing `/` creates a directory path.
