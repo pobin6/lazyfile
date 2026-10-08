@@ -479,6 +479,111 @@ func TestOpeningFileReportsLauncherError(t *testing.T) {
 	}
 }
 
+func TestRenameFileAndDirectoryFromFiles(t *testing.T) {
+	setTestConfigDir(t, t.TempDir())
+	tests := []struct {
+		name      string
+		directory bool
+	}{
+		{name: "file.txt"},
+		{name: "folder", directory: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, test.name)
+			if test.directory {
+				if err := os.Mkdir(source, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(source, []byte("content"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			app := App{focusedCol: 1}
+			app.current, _ = filesystem.Load(root, root)
+			app.handleKey(tcell.NewEventKey(tcell.KeyRune, "r", tcell.ModNone))
+			if !app.inputOpen || app.inputMode != inputRename || string(app.input) != test.name {
+				t.Fatalf("rename input = open:%t mode:%d value:%q", app.inputOpen, app.inputMode, app.input)
+			}
+			for range []rune(test.name) {
+				app.handleInputKey(tcell.NewEventKey(tcell.KeyBackspace, "", tcell.ModNone))
+			}
+			for _, character := range "renamed" {
+				app.handleInputKey(tcell.NewEventKey(tcell.KeyRune, string(character), tcell.ModNone))
+			}
+			app.handleInputKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+
+			destination := filepath.Join(root, "renamed")
+			if _, err := os.Stat(source); !os.IsNotExist(err) {
+				t.Fatalf("old path still exists: %v", err)
+			}
+			if _, err := os.Stat(destination); err != nil {
+				t.Fatalf("renamed item missing: %v", err)
+			}
+			if app.inputOpen || app.current.Items[app.itemSelected].Name() != "renamed" {
+				t.Fatalf("rename state: input open=%t, selected=%q", app.inputOpen, app.current.Items[app.itemSelected].Name())
+			}
+		})
+	}
+}
+
+func TestRenameRejectsExistingDestinationAndPathSeparators(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"source.txt", "existing.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := App{focusedCol: 1}
+	app.current, _ = filesystem.Load(root, root)
+	for index, item := range app.current.Items {
+		if item.Name() == "source.txt" {
+			app.itemSelected = index
+			break
+		}
+	}
+
+	app.renameCurrentItem("existing.txt")
+	if !strings.Contains(app.errorMessage, "already exists") {
+		t.Fatalf("collision error = %q", app.errorMessage)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "existing.txt")); err != nil || string(data) != "existing.txt" {
+		t.Fatalf("existing destination changed: data=%q err=%v", data, err)
+	}
+
+	for _, invalidName := range []string{"", ".", "..", `a/b`, `a\b`} {
+		app.renameCurrentItem(invalidName)
+		if !strings.Contains(app.errorMessage, "name must") {
+			t.Errorf("rename %q error = %q, want invalid-name error", invalidName, app.errorMessage)
+		}
+	}
+}
+
+func TestOpenCurrentFolderPassesSelectedItem(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(file, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := App{focusedCol: 1}
+	app.current, _ = filesystem.Load(root, root)
+	app.itemSelected = 0
+	var openedFolder, selectedPath string
+	app.revealItemInFolder = func(folder, selected string) error {
+		openedFolder = folder
+		selectedPath = selected
+		return nil
+	}
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyRune, "o", tcell.ModNone))
+	if openedFolder != root || selectedPath != file {
+		t.Fatalf("reveal args = folder:%q selected:%q; want %q, %q", openedFolder, selectedPath, root, file)
+	}
+	if len(app.operationLog) != 1 {
+		t.Fatalf("operation log = %q, want successful reveal entry", app.operationLog)
+	}
+}
+
 func TestCopyCutAndPasteItems(t *testing.T) {
 	setTestConfigDir(t, t.TempDir())
 	root := t.TempDir()
@@ -657,7 +762,7 @@ func TestShortcutHintByFocusedModule(t *testing.T) {
 		{
 			name:       "files",
 			focusedCol: 1,
-			contains:   []string{"a 新增", "d 删除", "y 复制", "x 剪切", "p 粘贴"},
+			contains:   []string{"o 在文件夹中显示", "r 重命名", "a 新增", "d 删除", "y 复制", "x 剪切", "p 粘贴"},
 		},
 		{
 			name:       "preview",

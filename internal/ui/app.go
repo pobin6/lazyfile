@@ -47,11 +47,51 @@ type App struct {
 	clipboardIndex     int
 	operationLog       []string
 	openFile           func(string) error
+	revealItemInFolder func(string, string) error
 	searchCol          int
 	searchQuery        string
 	searchInput        bool
 	searchMatches      []int
 	searchMatchIndex   int
+}
+
+func (a *App) renameCurrentItem(name string) {
+	if a.itemSelected < 0 || a.itemSelected >= len(a.current.Items) {
+		a.errorMessage = "No file selected"
+		return
+	}
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		a.errorMessage = "name must be a non-empty file or directory name"
+		return
+	}
+
+	source := filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
+	if name == a.current.Items[a.itemSelected].Name() {
+		a.inputOpen = false
+		a.input = nil
+		a.errorMessage = ""
+		return
+	}
+	destination := filepath.Join(a.current.Path, name)
+	if _, err := os.Lstat(destination); err == nil {
+		a.errorMessage = "item already exists: " + name
+		return
+	} else if !os.IsNotExist(err) {
+		a.errorMessage = fmt.Errorf("check rename destination: %w", err).Error()
+		return
+	}
+	if err := filesystem.Rename(source, destination); err != nil {
+		a.errorMessage = fmt.Errorf("rename item: %w", err).Error()
+		return
+	}
+	a.addLog("Rename %s to %s", source, destination)
+	a.inputOpen = false
+	a.input = nil
+	if err := a.refreshCurrent(name); err != nil {
+		a.errorMessage = err.Error()
+		return
+	}
+	a.errorMessage = ""
 }
 
 type inputMode int
@@ -62,6 +102,7 @@ const (
 	inputEdit
 	inputAddCollection
 	inputAddItem
+	inputRename
 )
 
 func New(screen tcell.Screen, initialDir string) (*App, error) {
@@ -185,6 +226,14 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 		case "e":
 			if a.focusedCol == 0 && !a.collectionPage && len(a.entries) > 0 {
 				a.openInput(inputEdit)
+			}
+		case "o":
+			if a.focusedCol == 1 {
+				a.revealCurrentInFolder()
+			}
+		case "r":
+			if a.focusedCol == 1 && a.itemSelected >= 0 && a.itemSelected < len(a.current.Items) {
+				a.openInput(inputRename)
 			}
 		case "d":
 			if a.focusedCol == 0 && !a.collectionPage && len(a.entries) > 0 {
@@ -432,6 +481,8 @@ func (a *App) openInput(mode inputMode) {
 	a.input = nil
 	if mode == inputEdit && len(a.entries) > 0 {
 		a.input = []rune(a.entries[a.selected].Path)
+	} else if mode == inputRename && a.itemSelected < len(a.current.Items) {
+		a.input = []rune(a.current.Items[a.itemSelected].Name())
 	}
 }
 
@@ -528,7 +579,7 @@ func (a *App) loadSelected() error {
 }
 
 func (a *App) navigateChild() {
-	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
+	if len(a.current.Items) == 0 || a.itemSelected < 0 || a.itemSelected >= len(a.current.Items) {
 		return
 	}
 	a.activateSelectedItem()
@@ -559,6 +610,27 @@ func (a *App) activateSelectedItem() {
 	}
 	a.errorMessage = ""
 	a.addLog("Open %s", path)
+}
+
+func (a *App) revealCurrentInFolder() {
+	if a.current.Path == "" {
+		a.errorMessage = "No current directory"
+		return
+	}
+	selectedPath := ""
+	if a.itemSelected < len(a.current.Items) {
+		selectedPath = filepath.Join(a.current.Path, a.current.Items[a.itemSelected].Name())
+	}
+	reveal := a.revealItemInFolder
+	if reveal == nil {
+		reveal = filesystem.Reveal
+	}
+	if err := reveal(a.current.Path, selectedPath); err != nil {
+		a.errorMessage = fmt.Errorf("open containing folder: %w", err).Error()
+		return
+	}
+	a.errorMessage = ""
+	a.addLog("Open folder %s", a.current.Path)
 }
 
 func (a *App) navigateParent() {
@@ -916,6 +988,10 @@ func (a *App) submitPath() {
 		a.createItem(strings.TrimSpace(string(a.input)))
 		return
 	}
+	if a.inputMode == inputRename {
+		a.renameCurrentItem(strings.TrimSpace(string(a.input)))
+		return
+	}
 	directory, err := filesystem.Load(string(a.input), a.baseDir)
 	if err != nil {
 		a.errorMessage = err.Error()
@@ -1112,7 +1188,7 @@ func (a *App) shortcutHint() string {
 		}
 		return "j/k 移动  / 搜索  n/N 匹配  a 新增条目  e 编辑  d 删除  [ 集合页  1/2/3 切换焦点  q 退出"
 	case 1:
-		return "j/k 移动  / 搜索  n/N 匹配  h 上级  Enter/l 进入/打开  a 新增  d 删除  y 复制  x 剪切  p 粘贴  q 退出"
+		return "j/k 移动  / 搜索  n/N 匹配  h 上级  Enter/l 进入/打开  o 在文件夹中显示  r 重命名  a 新增  d 删除  y 复制  x 剪切  p 粘贴  q 退出"
 	case 2:
 		return "j/k 滚动预览  1/2/3 切换焦点  q 退出"
 	default:
@@ -1445,6 +1521,8 @@ func (a *App) drawInputDialog(width, height int) {
 		title = "Add collection (Enter submit, Esc cancel)"
 	} else if a.inputMode == inputAddItem {
 		title = "Add file or directory (Enter submit, Esc cancel)"
+	} else if a.inputMode == inputRename {
+		title = "Rename file or directory (Enter submit, Esc cancel)"
 	}
 	a.drawText(x+2, y+1, dialogWidth-4, title)
 	a.drawText(x+2, y+2, dialogWidth-4, string(a.input))

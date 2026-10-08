@@ -30,8 +30,16 @@ func Open(path string) error {
 	return openPath(path)
 }
 
-func startDesktopOpener(name, path string) error {
-	command := exec.Command(name, path)
+func Rename(source, destination string) error {
+	return os.Rename(source, destination)
+}
+
+func Reveal(folder, selectedPath string) error {
+	return revealPath(folder, selectedPath)
+}
+
+func startDesktopOpener(name string, args ...string) error {
+	command := exec.Command(name, args...)
 	if err := command.Start(); err != nil {
 		return err
 	}

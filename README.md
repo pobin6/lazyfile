@@ -62,6 +62,8 @@ The application starts with the saved collection and browsing state. To start wi
 | `Enter` / `Esc` | Finish search on the first match / clear the search |
 | `h` | In Files, go to the parent directory |
 | `Enter` / `l` | In Files, enter a selected directory or open a selected file with the system default application |
+| `o` | Open the current directory in the system file manager and reveal the selected item when supported |
+| `r` | Rename the selected file or directory |
 | `a` | Add a collection, bookmark, file, or directory depending on the focused pane |
 | `e` | Edit the selected bookmark |
 | `d` | Delete the selected bookmark or Files item; deletion requires confirmation |
