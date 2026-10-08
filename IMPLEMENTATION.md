@@ -12,8 +12,8 @@ Go 和 `github.com/gdamore/tcell/v3`，符合
 
 - 顶部增加路径栏，使用边框显示第二列当前选中项的绝对路径；
 - 底部增加 File Info、Operation Log、Clipboard 三个无焦点窗格；
-- File Info 显示当前选中项的修改时间、权限、类型和大小；
-- Operation Log 记录目录导航、创建、删除、复制、剪切和书签等操作命令；
+- File Info 显示当前选中项的修改时间、平台对应的权限/属性、类型和大小；Windows 显示只读、隐藏、系统等文件属性，不显示 Unix 权限位；
+- Operation Log 记录目录导航、创建、删除、复制、剪切和书签等跨平台操作；
 - Clipboard 显示当前复制/剪切模式及已选择的文件路径；
 - 终端分为三列，宽度比例为 20% / 40% / 40%；
 - 第一列显示已保存的目录条目名称；
@@ -33,8 +33,8 @@ Go 和 `github.com/gdamore/tcell/v3`，符合
 - 选择目录条目后加载对应目录；
 - 支持输入相对路径；
 - 支持输入绝对路径；
-- 支持路径开头的 `~` 和 `~/子目录`；
-- 支持 `$HOME`、`${HOME}` 以及其他环境变量形式；
+- 支持路径开头的 `~`、`~/子目录` 和 `~\子目录`；
+- 支持平台原生绝对路径（Windows 盘符和 UNC 路径）、`$HOME`、`${HOME}`、Windows `%USERPROFILE%` 及其他环境变量形式；
 - 输入路径必须存在且为目录；
 - 路径无效时保留当前目录，并在底部显示错误信息。
 
@@ -63,9 +63,10 @@ Go 和 `github.com/gdamore/tcell/v3`，符合
 - Files 列中已选择的复制项以绿色加粗显示，剪切项以红色加粗显示；
 - 粘贴时禁止覆盖同名文件或目录，并支持文件和目录；
 - Files 列按 `d` 删除当前文件或目录，确认后执行实际删除；
-- Files 列按 `a` 新建项目；名称包含 `/` 时创建目录，否则创建空文件；
-- 条目和退出时的选中位置保存到 `XDG_CONFIG_HOME/lazyfile/entries.json`；
-- 未设置 `XDG_CONFIG_HOME` 时使用系统默认用户配置目录。
+- Files 列按 `a` 新建项目；名称包含平台路径分隔符时创建目录，否则创建空文件；
+- 条目和退出时的选中位置通过 `os.UserConfigDir` 持久化；Linux 遵循 `XDG_CONFIG_HOME`，Windows 使用 `%AppData%\lazyfile\entries.json`；
+- 跨卷剪切在原子重命名不可用时回退到复制后删除源文件；遇到失败会显示错误。
+- Windows 删除会在确认操作后清除只读文件属性，再执行删除；若属性调整或删除失败，会向用户显示错误。
 
 ### 键盘交互
 
@@ -102,6 +103,8 @@ Go 和 `github.com/gdamore/tcell/v3`，符合
 ```text
 cmd/lazyfile/main.go                    # 程序入口和 tcell 生命周期
 internal/filesystem/filesystem.go       # 路径解析和目录读取
+internal/filesystem/operations.go      # 复制和跨卷移动
+internal/filesystem/*_windows.go       # Windows 文件属性和跨卷错误适配
 internal/filesystem/filesystem_test.go  # 文件系统逻辑测试
 internal/config/config.go               # 条目和选中位置持久化
 internal/config/config_test.go          # 持久化测试
@@ -112,9 +115,9 @@ go.mod                                  # Go module 和 tcell 依赖
 go.sum                                  # 依赖校验和
 ```
 
-## 4. 已完成验证
+## 4. 验证
 
-以下命令已执行成功：
+CI 在 Linux 和 Windows runner 上运行以下命令：
 
 ```bash
 go test ./...
@@ -122,35 +125,17 @@ go vet ./...
 go build ./...
 ```
 
-当前 Linux x86-64 可执行文件已生成：
-
-```text
-./lazyfile
-```
-
-运行方式：
-
-```bash
-./lazyfile
-```
+Windows 10/11 上的交互验证建议使用 Windows Terminal，检查键盘输入、窗口缩放/重绘、常见文件操作和退出时终端状态恢复。可使用 `go build ./cmd/lazyfile` 构建当前平台的可执行文件。
 
 ## 5. 当前边界
 
 本阶段尚未实现以下功能：
 
-- 文件打开；
-- 文件打开；
-- 复制、移动、删除；
+- 在外部程序中打开文件；
 - 同步任务；
 - 用户自定义快捷键；
-- 右侧详情或预览内容。
+- macOS 兼容性验证。
 
 ## 6. 下一阶段建议
 
-下一阶段建议按以下顺序扩展：
-
-1. 为第二列增加选中状态、上下移动和终端高度不足时的滚动；
-2. 支持进入子目录和返回上级目录；
-3. 在右侧加入选中文件的基本元数据；
-4. 抽离任务模型，为复制和移动操作预留取消、进度和错误状态；
-5. 在功能稳定后再接入预览和同步能力。
+下一阶段建议先完成 Windows Terminal 交互冒烟验证，再按相同验证标准评估 macOS 兼容性。

@@ -17,18 +17,26 @@ lazyfile 是一个使用 Go 编写的终端文件管理器，提供三栏式文�
 ## 环境要求
 
 - Go 1.27 或更高版本
-- 支持 Unicode 方框字符和颜色的终端
+- Linux 或 Windows 10/11
+- 支持 Unicode 方框字符和颜色的终端；Windows 推荐使用 Windows Terminal
 
 ## 构建和运行
 
-在项目根目录执行：
+Linux：
 
 ```sh
 go build -o lazyfile ./cmd/lazyfile
 ./lazyfile
 ```
 
-也可以直接运行：
+Windows PowerShell：
+
+```powershell
+go build -o lazyfile.exe ./cmd/lazyfile
+.\lazyfile.exe
+```
+
+也可以在任一平台直接运行：
 
 ```sh
 go run ./cmd/lazyfile
@@ -63,17 +71,23 @@ go run ./cmd/lazyfile
 | `Ctrl+c` | 退出 |
 | `Backspace` | 删除输入内容中的最后一个字符 |
 
-在 Files 栏创建项目时，名称不含 `/` 会创建空文件；名称包含 `/` 会创建目录路径。
+在 Files 栏创建项目时，名称不含路径分隔符会创建空文件；名称包含 `/` 会创建目录路径，Windows 也接受 `\`。
 
 ## 配置文件
 
 lazyfile 会将集合、目录条目和浏览状态保存到：
 
 ```text
+%AppData%\lazyfile\entries.json
+```
+
+（Windows）或：
+
+```text
 $XDG_CONFIG_HOME/lazyfile/entries.json
 ```
 
-如果未设置 `XDG_CONFIG_HOME`，程序会使用操作系统默认的用户配置目录。例如 Linux 上通常为 `~/.config/lazyfile/entries.json`。
+如果 Linux 未设置 `XDG_CONFIG_HOME`，程序会使用操作系统默认的用户配置目录（通常为 `~/.config/lazyfile/entries.json`）。程序通过 Go 的 `os.UserConfigDir` 获取平台标准配置目录。
 
 ## 开发
 
@@ -84,6 +98,8 @@ go test ./...
 go vet ./...
 go build ./...
 ```
+
+CI 会在 Linux 和 Windows 上运行这些检查。Windows 交互冒烟测试请在 Windows Terminal 中启动程序，并检查键盘输入、终端缩放/重绘、文件操作以及退出时终端状态是否正常恢复。
 
 ## 许可证
 

@@ -41,3 +41,5 @@
 - 文件系统和布局核心逻辑单元测试。
 
 已通过 `go test ./...`、`go vet ./...` 和 `go build ./...` 验证。
+
+Linux 和 Windows 10/11 是当前平台目标，Windows Terminal 为 Windows 首选终端。配置路径使用 `os.UserConfigDir`；路径展开、文件属性展示、只读文件删除和跨卷移动等差异集中在文件系统适配层。macOS 尚未纳入当前 CI 验证范围。

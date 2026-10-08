@@ -1,3 +1,4 @@
 /lazyfile
 *.tmp
 *.log
+*.exe

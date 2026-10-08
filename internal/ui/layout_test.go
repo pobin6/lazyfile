@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -232,7 +233,7 @@ func TestSearchFilesByPartialNameAndNavigateMatches(t *testing.T) {
 }
 
 func TestSearchFirstColumnAndSearchByFileLineNumber(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setTestConfigDir(t, t.TempDir())
 	app := App{
 		focusedCol:     0,
 		collectionPage: true,
@@ -306,7 +307,7 @@ func TestSearchFirstColumnAndSearchByFileLineNumber(t *testing.T) {
 }
 
 func TestEntryNavigationAndDeleteConfirmation(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setTestConfigDir(t, t.TempDir())
 	app := App{
 		entries: []config.Entry{
 			{Name: "one", Path: "/one"},
@@ -342,7 +343,7 @@ func TestEntryNavigationAndDeleteConfirmation(t *testing.T) {
 }
 
 func TestCollectionNavigationAndPageSwitching(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setTestConfigDir(t, t.TempDir())
 	app := App{
 		collections: []config.Collection{
 			{Name: "one"},
@@ -369,7 +370,7 @@ func TestCollectionNavigationAndPageSwitching(t *testing.T) {
 }
 
 func TestSecondColumnDirectoryNavigationPersistsState(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setTestConfigDir(t, t.TempDir())
 	root := t.TempDir()
 	child := filepath.Join(root, "child")
 	if err := os.Mkdir(child, 0o755); err != nil {
@@ -403,7 +404,7 @@ func TestSecondColumnDirectoryNavigationPersistsState(t *testing.T) {
 }
 
 func TestCopyCutAndPasteItems(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setTestConfigDir(t, t.TempDir())
 	root := t.TempDir()
 	source := filepath.Join(root, "source.txt")
 	if err := os.WriteFile(source, []byte("content"), 0o644); err != nil {
@@ -444,7 +445,7 @@ func TestCopyCutAndPasteItems(t *testing.T) {
 }
 
 func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setTestConfigDir(t, t.TempDir())
 	root := t.TempDir()
 	app := App{focusedCol: 1}
 	app.current, _ = filesystem.Load(root, root)
@@ -462,6 +463,12 @@ func TestCreateAndDeleteFilesModuleItems(t *testing.T) {
 	app.createItem("a/b")
 	if info, err := os.Stat(filepath.Join(root, "a", "b")); err != nil || !info.IsDir() {
 		t.Fatalf("directory was not created: info=%v err=%v message=%q", info, err, app.errorMessage)
+	}
+	if runtime.GOOS == "windows" {
+		app.createItem(`native\path`)
+		if info, err := os.Stat(filepath.Join(root, "native", "path")); err != nil || !info.IsDir() {
+			t.Fatalf("directory with Windows separators was not created: info=%v err=%v message=%q", info, err, app.errorMessage)
+		}
 	}
 
 	for index, item := range app.current.Items {
@@ -515,13 +522,19 @@ func TestFooterPaneData(t *testing.T) {
 	}
 	app := App{current: directory}
 	infoLines := app.selectedItemInfo()
-	if len(infoLines) != 3 || !strings.Contains(infoLines[1], "0640") {
+	if len(infoLines) != 3 {
+		t.Fatalf("file info = %q, want three metadata fields", infoLines)
+	}
+	if runtime.GOOS == "windows" && (!strings.HasPrefix(infoLines[1], "Attributes:") || strings.Contains(infoLines[1], "0640")) {
+		t.Fatalf("Windows file info = %q, want native attributes without Unix permission bits", infoLines[1])
+	}
+	if runtime.GOOS != "windows" && !strings.Contains(infoLines[1], "0640") {
 		t.Fatalf("file info = %q, expected permissions", infoLines)
 	}
 
-	app.addLog("touch %s", path)
+	app.addLog("Create file %s", path)
 	logLines := app.operationLogLines()
-	if len(logLines) != 1 || logLines[0] != "touch "+path {
+	if len(logLines) != 1 || logLines[0] != "Create file "+path {
 		t.Fatalf("operation log = %q", logLines)
 	}
 
@@ -531,6 +544,15 @@ func TestFooterPaneData(t *testing.T) {
 	if len(clipboardLines) != 1 || !strings.HasPrefix(clipboardLines[0], "CUT  ") {
 		t.Fatalf("clipboard lines = %q", clipboardLines)
 	}
+}
+
+func setTestConfigDir(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", path)
+		return
+	}
+	t.Setenv("XDG_CONFIG_HOME", path)
 }
 
 func TestShortcutHintByFocusedModule(t *testing.T) {

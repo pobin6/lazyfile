@@ -19,18 +19,26 @@ lazyfile is a terminal-based file manager written in Go. It provides a three-col
 ## Requirements
 
 - Go 1.27 or later
-- A terminal that supports Unicode box-drawing characters and color
+- Linux or Windows 10/11
+- A terminal that supports Unicode box-drawing characters and color; Windows Terminal is recommended on Windows
 
 ## Build and run
 
-From the project root:
+On Linux:
 
 ```sh
 go build -o lazyfile ./cmd/lazyfile
 ./lazyfile
 ```
 
-Or run it directly:
+On Windows PowerShell:
+
+```powershell
+go build -o lazyfile.exe ./cmd/lazyfile
+.\lazyfile.exe
+```
+
+Or run it directly on either platform:
 
 ```sh
 go run ./cmd/lazyfile
@@ -65,17 +73,23 @@ The application starts with the saved collection and browsing state. To start wi
 | `Ctrl+c` | Quit |
 | `Backspace` | Remove the last character in an input |
 
-When creating an item in Files, a name without `/` creates an empty file; a name containing `/` creates a directory path.
+When creating an item in Files, a name without a path separator creates an empty file; a name containing `/` creates a directory path, and Windows also accepts `\`.
 
 ## Configuration
 
 lazyfile stores collections, bookmarks, and directory browsing state in:
 
 ```text
+%AppData%\lazyfile\entries.json
+```
+
+on Windows, and in:
+
+```text
 $XDG_CONFIG_HOME/lazyfile/entries.json
 ```
 
-If `XDG_CONFIG_HOME` is not set, the operating system's user configuration directory is used (for example, `~/.config/lazyfile/entries.json` on Linux).
+If `XDG_CONFIG_HOME` is not set on Linux, the operating system's user configuration directory is used (typically `~/.config/lazyfile/entries.json`). The application uses Go's `os.UserConfigDir`, so it follows the platform's standard user configuration location.
 
 ## Development
 
@@ -86,6 +100,8 @@ go test ./...
 go vet ./...
 go build ./...
 ```
+
+The CI workflow runs these checks on Linux and Windows. For an interactive Windows smoke test, launch the application in Windows Terminal and verify keyboard input, resizing/redraw, file operations, and clean terminal restoration on exit.
 
 ## License
 

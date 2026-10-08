@@ -43,14 +43,14 @@ func resolvePath(path, baseDir string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path cannot be empty")
 	}
-	path = os.ExpandEnv(path)
+	path = expandEnvironment(path)
 	if path == "~" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("resolve home directory: %w", err)
 		}
 		path = homeDir
-	} else if strings.HasPrefix(path, "~"+string(filepath.Separator)) {
+	} else if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("resolve home directory: %w", err)
@@ -66,4 +66,25 @@ func resolvePath(path, baseDir string) (string, error) {
 		return "", fmt.Errorf("resolve path: %w", err)
 	}
 	return resolved, nil
+}
+
+func expandEnvironment(path string) string {
+	path = os.ExpandEnv(path)
+	var expanded strings.Builder
+	for index := 0; index < len(path); {
+		if path[index] == '%' {
+			endOffset := strings.IndexByte(path[index+1:], '%')
+			if endOffset > 0 {
+				end := index + 1 + endOffset
+				if value, ok := os.LookupEnv(path[index+1 : end]); ok {
+					expanded.WriteString(value)
+					index = end + 1
+					continue
+				}
+			}
+		}
+		expanded.WriteByte(path[index])
+		index++
+	}
+	return expanded.String()
 }

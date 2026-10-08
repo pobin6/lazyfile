@@ -3,12 +3,17 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestSaveAndLoad(t *testing.T) {
 	configDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configDir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", configDir)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", configDir)
+	}
 
 	want := State{
 		Entries:       []Entry{{Path: "/tmp/example", Name: "example"}},

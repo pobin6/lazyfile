@@ -582,7 +582,7 @@ func (a *App) navigateTo(path string) {
 	a.itemScroll = 0
 	a.previewOffset = 0
 	a.errorMessage = ""
-	a.addLog("cd %s", directory.Path)
+	a.addLog("Navigate to %s", directory.Path)
 	if err := a.saveState(); err != nil {
 		a.errorMessage = err.Error()
 	}
@@ -675,20 +675,20 @@ func (a *App) pasteItem() {
 			return
 		}
 		if a.clipboardCut {
-			err = os.Rename(source, destination)
+			err = filesystem.Move(source, destination)
 		} else {
-			err = copyItem(source, destination)
+			err = filesystem.Copy(source, destination)
 		}
 		if err != nil {
 			a.errorMessage = fmt.Errorf("paste item: %w", err).Error()
 			return
 		}
 		if a.clipboardCut {
-			a.addLog("mv %s %s", source, destination)
+			a.addLog("Move %s to %s", source, destination)
 		} else if info.IsDir() {
-			a.addLog("cp -r %s %s", source, destination)
+			a.addLog("Copy directory %s to %s", source, destination)
 		} else {
-			a.addLog("cp %s %s", source, destination)
+			a.addLog("Copy %s to %s", source, destination)
 		}
 	}
 	if a.clipboardCut {
@@ -701,33 +701,6 @@ func (a *App) pasteItem() {
 		return
 	}
 	a.errorMessage = ""
-}
-
-func copyItem(source, destination string) error {
-	info, err := os.Stat(source)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		if err := os.Mkdir(destination, info.Mode().Perm()); err != nil {
-			return err
-		}
-		children, err := os.ReadDir(source)
-		if err != nil {
-			return err
-		}
-		for _, child := range children {
-			if err := copyItem(filepath.Join(source, child.Name()), filepath.Join(destination, child.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(destination, data, info.Mode().Perm())
 }
 
 func (a *App) refreshCurrent(selectedName string) error {
@@ -820,7 +793,7 @@ func (a *App) deleteSelected() {
 	if len(a.entries) == 0 {
 		return
 	}
-	a.addLog("bookmark-rm %s", a.entries[a.selected].Path)
+	a.addLog("Remove bookmark %s", a.entries[a.selected].Path)
 	a.entries = append(a.entries[:a.selected], a.entries[a.selected+1:]...)
 	if len(a.collections) > 0 {
 		a.collections[a.selectedCollection].Entries = a.entries
@@ -859,11 +832,11 @@ func (a *App) deleteCurrentItem() {
 	}
 	name := a.current.Items[a.itemSelected].Name()
 	path := filepath.Join(a.current.Path, name)
-	if err := os.RemoveAll(path); err != nil {
+	if err := filesystem.RemoveAll(path); err != nil {
 		a.errorMessage = fmt.Errorf("delete item: %w", err).Error()
 		return
 	}
-	a.addLog("rm -r %s", path)
+	a.addLog("Delete %s", path)
 	if err := a.refreshCurrent(""); err != nil {
 		a.errorMessage = err.Error()
 		return
@@ -900,7 +873,7 @@ func (a *App) submitPath() {
 		a.selected = 0
 		a.current = filesystem.Directory{}
 		a.collectionPage = true
-		a.addLog("collection-add %q", name)
+		a.addLog("Add collection %q", name)
 		a.inputOpen = false
 		a.input = nil
 		a.errorMessage = ""
@@ -926,12 +899,12 @@ func (a *App) submitPath() {
 			CurrentPath: directory.Path,
 		})
 		a.selected = len(a.entries) - 1
-		a.addLog("bookmark-add %s", directory.Path)
+		a.addLog("Add bookmark %s", directory.Path)
 	case inputEdit:
 		a.entries[a.selected].Path = directory.Path
 		a.entries[a.selected].Name = directory.Name
 		a.entries[a.selected].CurrentPath = directory.Path
-		a.addLog("bookmark-edit %s", directory.Path)
+		a.addLog("Edit bookmark %s", directory.Path)
 	}
 	if len(a.collections) > 0 {
 		a.collections[a.selectedCollection].Entries = a.entries
@@ -967,8 +940,12 @@ func (a *App) createItem(name string) {
 		a.errorMessage = fmt.Errorf("check item: %w", err).Error()
 		return
 	}
+	isDirectory := strings.Contains(name, string(filepath.Separator))
+	if filepath.Separator == '\\' && strings.Contains(name, "/") {
+		isDirectory = true
+	}
 	var err error
-	if strings.Contains(name, "/") {
+	if isDirectory {
 		err = os.MkdirAll(destination, 0o755)
 	} else {
 		err = os.WriteFile(destination, nil, 0o644)
@@ -977,10 +954,10 @@ func (a *App) createItem(name string) {
 		a.errorMessage = fmt.Errorf("create item: %w", err).Error()
 		return
 	}
-	if strings.Contains(name, "/") {
-		a.addLog("mkdir -p %s", destination)
+	if isDirectory {
+		a.addLog("Create directory %s", destination)
 	} else {
-		a.addLog("touch %s", destination)
+		a.addLog("Create file %s", destination)
 	}
 	if err := a.refreshCurrent(filepath.Base(destination)); err != nil {
 		a.errorMessage = err.Error()
@@ -1233,7 +1210,7 @@ func (a *App) selectedItemInfo() []string {
 	}
 	return []string{
 		"Modified: " + info.ModTime().Format("2006-01-02 15:04:05"),
-		fmt.Sprintf("Permissions: %s (%04o)", info.Mode().String(), info.Mode().Perm()),
+		filesystem.FormatFileAttributes(info),
 		fmt.Sprintf("%s | Size: %d B", itemType, info.Size()),
 	}
 }
