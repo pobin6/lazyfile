@@ -3,6 +3,7 @@ package filesystem
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -23,6 +24,18 @@ func Move(source, destination string) error {
 		return err
 	}
 	return moveAcrossDevices(source, destination)
+}
+
+func Open(path string) error {
+	return openPath(path)
+}
+
+func startDesktopOpener(name, path string) error {
+	command := exec.Command(name, path)
+	if err := command.Start(); err != nil {
+		return err
+	}
+	return command.Process.Release()
 }
 
 func moveAcrossDevices(source, destination string) error {

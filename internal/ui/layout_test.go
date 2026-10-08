@@ -403,6 +403,82 @@ func TestSecondColumnDirectoryNavigationPersistsState(t *testing.T) {
 	}
 }
 
+func TestEnterAndLActivateDirectoriesAndOpenFiles(t *testing.T) {
+	setTestConfigDir(t, t.TempDir())
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(file, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := App{focusedCol: 1}
+	app.current, _ = filesystem.Load(root, root)
+	opened := ""
+	app.openFile = func(path string) error {
+		opened = path
+		return nil
+	}
+
+	for _, name := range []string{"child", "note.txt"} {
+		for index, item := range app.current.Items {
+			if item.Name() == name {
+				app.itemSelected = index
+				break
+			}
+		}
+		if name == "child" {
+			app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+			if app.current.Path != child {
+				t.Fatalf("Enter on directory navigated to %q, want %q", app.current.Path, child)
+			}
+			app.current, _ = filesystem.Load(root, root)
+			for index, item := range app.current.Items {
+				if item.Name() == name {
+					app.itemSelected = index
+					break
+				}
+			}
+			app.handleKey(tcell.NewEventKey(tcell.KeyRune, "l", tcell.ModNone))
+			if app.current.Path != child {
+				t.Fatalf("l on directory navigated to %q, want %q", app.current.Path, child)
+			}
+			app.current, _ = filesystem.Load(root, root)
+			continue
+		}
+
+		app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+		if opened != file {
+			t.Fatalf("Enter opened %q, want %q", opened, file)
+		}
+		app.handleKey(tcell.NewEventKey(tcell.KeyRune, "l", tcell.ModNone))
+		if opened != file {
+			t.Fatalf("l opened %q, want %q", opened, file)
+		}
+	}
+}
+
+func TestOpeningFileReportsLauncherError(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(file, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := App{focusedCol: 1}
+	app.current, _ = filesystem.Load(root, root)
+	app.openFile = func(string) error {
+		return os.ErrPermission
+	}
+
+	app.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModNone))
+	if !strings.Contains(app.errorMessage, os.ErrPermission.Error()) {
+		t.Fatalf("open error message = %q, want permission error", app.errorMessage)
+	}
+}
+
 func TestCopyCutAndPasteItems(t *testing.T) {
 	setTestConfigDir(t, t.TempDir())
 	root := t.TempDir()

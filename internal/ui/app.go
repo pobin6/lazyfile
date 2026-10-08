@@ -46,6 +46,7 @@ type App struct {
 	clipboardDir       string
 	clipboardIndex     int
 	operationLog       []string
+	openFile           func(string) error
 	searchCol          int
 	searchQuery        string
 	searchInput        bool
@@ -134,6 +135,10 @@ func (a *App) handleKey(event *tcell.EventKey) bool {
 	switch event.Key() {
 	case tcell.KeyCtrlC:
 		return true
+	case tcell.KeyEnter:
+		if a.focusedCol == 1 {
+			a.activateSelectedItem()
+		}
 	case tcell.KeyEscape:
 		if a.searchQuery != "" || a.searchInput {
 			a.clearSearch()
@@ -526,11 +531,34 @@ func (a *App) navigateChild() {
 	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
 		return
 	}
-	item := a.current.Items[a.itemSelected]
-	if !item.IsDir() {
+	a.activateSelectedItem()
+}
+
+func (a *App) activateSelectedItem() {
+	if len(a.current.Items) == 0 || a.itemSelected >= len(a.current.Items) {
 		return
 	}
-	a.navigateTo(filepath.Join(a.current.Path, item.Name()))
+	item := a.current.Items[a.itemSelected]
+	path := filepath.Join(a.current.Path, item.Name())
+	info, err := os.Stat(path)
+	if err != nil {
+		a.errorMessage = fmt.Errorf("inspect selected item: %w", err).Error()
+		return
+	}
+	if info.IsDir() {
+		a.navigateTo(path)
+		return
+	}
+	openFile := a.openFile
+	if openFile == nil {
+		openFile = filesystem.Open
+	}
+	if err := openFile(path); err != nil {
+		a.errorMessage = fmt.Errorf("open file: %w", err).Error()
+		return
+	}
+	a.errorMessage = ""
+	a.addLog("Open %s", path)
 }
 
 func (a *App) navigateParent() {
@@ -577,7 +605,9 @@ func (a *App) navigateTo(path string) {
 		return
 	}
 	a.current = directory
-	a.entries[a.selected].CurrentPath = directory.Path
+	if a.selected < len(a.entries) {
+		a.entries[a.selected].CurrentPath = directory.Path
+	}
 	a.itemSelected = 0
 	a.itemScroll = 0
 	a.previewOffset = 0
@@ -1082,7 +1112,7 @@ func (a *App) shortcutHint() string {
 		}
 		return "j/k 移动  / 搜索  n/N 匹配  a 新增条目  e 编辑  d 删除  [ 集合页  1/2/3 切换焦点  q 退出"
 	case 1:
-		return "j/k 移动  / 搜索  n/N 匹配  h/l 上级/进入  a 新增  d 删除  y 复制  x 剪切  p 粘贴  q 退出"
+		return "j/k 移动  / 搜索  n/N 匹配  h 上级  Enter/l 进入/打开  a 新增  d 删除  y 复制  x 剪切  p 粘贴  q 退出"
 	case 2:
 		return "j/k 滚动预览  1/2/3 切换焦点  q 退出"
 	default:

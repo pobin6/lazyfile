@@ -60,7 +60,8 @@ The application starts with the saved collection and browsing state. To start wi
 | `/` | Search in the focused Collections/Directories or Files pane; matches update as you type |
 | `n` / `N` | Move to the next/previous search match |
 | `Enter` / `Esc` | Finish search on the first match / clear the search |
-| `h` / `l` | In Files, go to the parent directory / enter the selected directory |
+| `h` | In Files, go to the parent directory |
+| `Enter` / `l` | In Files, enter a selected directory or open a selected file with the system default application |
 | `a` | Add a collection, bookmark, file, or directory depending on the focused pane |
 | `e` | Edit the selected bookmark |
 | `d` | Delete the selected bookmark or Files item; deletion requires confirmation |
@@ -68,12 +69,14 @@ The application starts with the saved collection and browsing state. To start wi
 | `Ctrl+y` / `Ctrl+x` | Add the current item to the copy / cut selection |
 | `Shift+y` / `Shift+x` | Select a range of items for copy / cut |
 | `p` | Paste the selected items into the current Files directory |
-| `Enter` | Confirm an input, delete confirmation, or search |
+| `Enter` | In Files, enter a directory or open a file; otherwise confirm an input, deletion, or search |
 | `Esc` | Cancel a dialog, or clear the Files selection when no dialog is open |
 | `Ctrl+c` | Quit |
 | `Backspace` | Remove the last character in an input |
 
 When creating an item in Files, a name without a path separator creates an empty file; a name containing `/` creates a directory path, and Windows also accepts `\`.
+
+On Linux, opening files requires `xdg-open` (usually provided by `xdg-utils`).
 
 ## Configuration
 
